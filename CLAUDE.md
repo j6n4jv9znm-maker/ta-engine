@@ -18,8 +18,15 @@ TypeScript (strict) + Vite + Three.js (WebGL) in the browser for development, Vi
 - `npm test`: run Vitest once (`npm run test:watch` to watch)
 - `npm run typecheck`: TypeScript check
 - `npm run build`: typecheck and production build
+- `npm run ta -- <command>`: data CLI (`archives`, `ls`, `extract`, `cat`, `tdf`, `fbi ARMCOM`, `units`, `palette`); extracted files go to the gitignored `extracted/`
+- Debug pages (dev server): http://localhost:5173/archives.html
 
 ## Layout
 - `src/`: engine source (`main.ts` is the browser entry)
+  - `formats/`: file-format parsers (HPI archives, TDF text, palette)
+  - `io/`: byte sources for Node, browser files and the dev server
+  - `vfs.ts`: layers archives in TA's load order (.hpi < .ufo < .ccx < .gpf < .gp3)
+  - `debug/`: debug viewer pages
+- `tools/`: command-line tools (`ta.ts`)
 - `test/`: Vitest tests
 - `data/`: your local game files, gitignored

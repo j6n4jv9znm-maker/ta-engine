@@ -6,4 +6,7 @@ A clean-room, Mac-native reimplementation of Total Annihilation that plays on yo
 npm install
 npm run dev    # http://localhost:5173
 npm test
+npm run ta -- fbi ARMCOM   # print a unit's definition as JSON
 ```
+
+With the dev server running, http://localhost:5173/archives.html browses every file in your archives.
