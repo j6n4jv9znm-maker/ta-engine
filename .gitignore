@@ -1,0 +1,10 @@
+# Original game data (Cavedog assets) must never be committed.
+/data/*
+!/data/README.md
+
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.vite/
