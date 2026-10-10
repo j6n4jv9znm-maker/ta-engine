@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TA Sandbox</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0d110d; --panel: #151b15; --line: #2a352a; --text: #d6e6d6; --dim: #7f947f; --accent: #8f8; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
+      body { display: grid; grid-template-columns: minmax(220px, 260px) 1fr; }
+      #side { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-right: 1px solid var(--line); height: 100vh; overflow: auto; }
+      h1 { font-size: 14px; margin: 0; color: var(--accent); }
+      h1 a { color: var(--dim); font-size: 11px; }
+      #status, .dim { color: var(--dim); }
+      #view { position: relative; min-width: 0; user-select: none; }
+      #view canvas.main { display: block; width: 100%; height: 100%; }
+      #minimap { position: absolute; top: 10px; right: 10px; border: 1px solid #000; outline: 1px solid var(--line); cursor: crosshair; image-rendering: pixelated; max-width: 30%; }
+      #box { position: absolute; border: 1px solid #8f8; background: rgba(136, 255, 136, 0.08); pointer-events: none; display: none; }
+      #hint { position: absolute; bottom: 8px; left: 10px; color: var(--dim); pointer-events: none; text-shadow: 0 0 3px #000; }
+      button, input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 3px 6px; border-radius: 3px; }
+      #selInfo { white-space: pre-line; }
+      .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    </style>
+  </head>
+  <body>
+    <aside id="side">
+      <h1>TA Sandbox <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
+      <div id="status">Loading…</div>
+      <label class="row">Map <select id="map"></select></label>
+      <div class="row"><button id="restart">Restart</button> <button id="pause">Pause</button></div>
+      <div id="clock" class="dim"></div>
+      <div id="selInfo" class="dim">Nothing selected.</div>
+      <div class="dim">
+        Left-click a unit to select it, or drag a box around several.<br />
+        Shift adds to the selection. Ctrl+A selects everything.<br />
+        Right-click the ground to move there. S stops.<br />
+        Arrow keys or screen edge to scroll, wheel to zoom, middle-drag to pan.
+      </div>
+      <label class="row">or open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
+    </aside>
+    <main id="view">
+      <canvas id="minimap" title="Click to jump"></canvas>
+      <div id="box"></div>
+      <div id="hint">Phase 5 sandbox: movement only. No building or fighting yet.</div>
+    </main>
+    <script type="module" src="/src/debug/game.ts"></script>
+  </body>
+</html>
