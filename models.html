@@ -27,6 +27,9 @@
       #swatches { display: flex; gap: 3px; }
       #swatches button { width: 20px; height: 20px; padding: 0; }
       #swatches button.on { outline: 2px solid #fff; }
+      .actions { display: flex; flex-wrap: wrap; gap: 4px; }
+      .actions button.on { border-color: var(--accent); color: var(--accent); }
+      .dim { color: var(--dim); }
     </style>
   </head>
   <body>
@@ -38,7 +41,16 @@
         <div class="row">Team colour <span id="swatches"></span></div>
         <label class="row"><input id="wire" type="checkbox" /> Wireframe</label>
         <label class="row"><input id="spin" type="checkbox" checked /> Turntable</label>
-        <label class="row" title="Unit scripts hide these until a weapon fires (Phase 4)"><input id="flash" type="checkbox" checked /> Hide muzzle flashes</label>
+        <div id="actions" class="actions">
+          <button id="aWalk" title="StartMoving / StopMoving">Walk</button>
+          <button id="aAim" title="AimPrimary at a random heading">Aim</button>
+          <button id="aFire" title="FirePrimary">Fire</button>
+          <button id="aBuild" title="StartBuilding / StopBuilding">Build</button>
+          <button id="aOpen" title="Activate / Deactivate">Open</button>
+          <button id="aDie" title="Killed">Die</button>
+          <button id="aReset" title="Reload the unit and run Create again">Reset</button>
+        </div>
+        <div id="scriptInfo" class="dim"></div>
         <label class="row">or open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
       </div>
       <div id="list"></div>

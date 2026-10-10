@@ -64,6 +64,7 @@ export function createUnitModel(root: ModelPiece, lib: TextureLibrary, palette: 
     const g = new THREE.Group();
     g.name = piece.name;
     g.position.set(...piece.offset);
+    g.userData.rest = [...piece.offset];
     // A few models repeat a piece name; lookups get the first one.
     if (!pieces.has(piece.name.toLowerCase())) pieces.set(piece.name.toLowerCase(), g);
 
