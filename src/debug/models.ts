@@ -1,14 +1,22 @@
 /*
- * Phase 2 milestone page: pick any unit and rotate it, fully textured, in any team colour.
- * Rendering only; there is no simulation here yet.
+ * Model viewer: pick any unit, rotate it, fully textured, in any team colour (Phase 2), and run its
+ * unit script (Phase 4): walk, aim, fire, build, open/close and die.
+ *
+ * The script and piece animation run in the simulation at a fixed 30 Hz; the renderer only reads the
+ * piece state to pose the model. Flying debris from explosions is a renderer-only effect.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { allPieces, parse3do } from '../formats/3do';
+import { allPieces, parse3do, type ModelPiece } from '../formats/3do';
+import { parseCob } from '../formats/cob';
 import { latin1 } from '../formats/hpi';
 import { parsePalette, PALETTE_PATH, type Palette } from '../formats/palette';
 import { getBlock, getValue, parseTdfWithWarnings } from '../formats/tdf';
+import { applyPose } from '../graphics/pose';
 import { createUnitModel, type UnitModel } from '../graphics/threeModel';
+import { TICKS_PER_SECOND } from '../sim/pieces';
+import { Rng } from '../sim/rng';
+import { ExplodeType, UnitScripts } from '../sim/unitScripts';
 import { loadTextureLibrary, TEAM_COLOR_COUNT, type TextureLibrary } from '../graphics/textures';
 import { listUnitFiles } from '../units';
 import type { Vfs } from '../vfs';
@@ -21,7 +29,7 @@ const infoEl = $('info');
 const filterEl = $<HTMLInputElement>('filter');
 const wireEl = $<HTMLInputElement>('wire');
 const spinEl = $<HTMLInputElement>('spin');
-const flashEl = $<HTMLInputElement>('flash');
+const scriptInfoEl = $('scriptInfo');
 const view = $('view');
 
 interface UnitRow {
@@ -36,6 +44,9 @@ let palette: Palette | undefined;
 let lib: TextureLibrary | undefined;
 let units: UnitRow[] = [];
 let current: UnitModel | undefined;
+let currentRow: UnitRow | undefined;
+let currentRoot: ModelPiece | undefined;
+let scripts: UnitScripts | undefined;
 let team = 0;
 let loadToken = 0;
 
@@ -68,11 +79,39 @@ function resize(): void {
 window.addEventListener('resize', resize);
 resize();
 
+// Fixed-step simulation (30 Hz), decoupled from the frame rate.
+const TICK_MS = 1000 / TICKS_PER_SECOND;
+let lastFrame = performance.now();
+let accumulator = 0;
+let spinAngle = 0;
 renderer.setAnimationLoop((t) => {
-  if (spinEl.checked) turntable.rotation.y = (t / 1000) * 0.4;
+  const dt = Math.min(250, t - lastFrame);
+  lastFrame = t;
+  if (spinEl.checked) spinAngle += (dt / 1000) * 0.4;
+  turntable.rotation.y = spinAngle;
+  accumulator += dt;
+  while (accumulator >= TICK_MS) {
+    accumulator -= TICK_MS;
+    simTick();
+  }
+  if (current && scripts) applyPose(current, scripts.pieces);
+  updateDebris(dt / 1000);
   controls.update();
   renderer.render(scene, camera);
 });
+
+function simTick(): void {
+  if (!scripts) return;
+  scripts.tick();
+  const events = scripts.events;
+  scripts.events = [];
+  for (const e of events) if (e.kind === 'explode') spawnDebris(e.piece, e.type);
+  if (dying && !scripts.vm.threads.some((th) => th.name.toLowerCase() === 'killed' && th.state.kind !== 'finished' && !th.killed)) {
+    dying = false;
+    if (current) current.root.visible = false; // the unit is gone; its pieces flew off
+    setScriptInfo('Killed finished. Press Reset to bring the unit back.');
+  }
+}
 
 // --- Data loading -----------------------------------------------------------
 async function load(open: () => Promise<Vfs | undefined>, none: string): Promise<void> {
@@ -139,19 +178,24 @@ async function showUnit(u: UnitRow): Promise<void> {
     return;
   }
   const root = parse3do(await vfs.read(path));
+  const cobPath = `scripts/${u.unitName}.cob`;
+  const cob = vfs.exists(cobPath) ? parseCob(await vfs.read(cobPath)) : undefined;
   if (token !== loadToken) return;
 
   if (current) {
     turntable.remove(current.root);
     current.dispose();
   }
+  clearDebris();
   current = createUnitModel(root, lib, palette, team);
   current.root.userData.unitName = u.unitName;
+  currentRow = u;
+  currentRoot = root;
   turntable.add(current.root);
   applyWireframe();
-  applyFlashes();
   frame(current.root);
   highlight();
+  startScripts(cob);
 
   const pieces = allPieces(root);
   const tris = pieces.reduce((n, p) => n + p.primitives.length, 0);
@@ -168,7 +212,8 @@ function frame(obj: THREE.Object3D): void {
   const center = box.getCenter(new THREE.Vector3());
   const radius = Math.max(size.x, size.y, size.z, 10);
   controls.target.copy(center);
-  camera.position.copy(center).add(new THREE.Vector3(radius * 1.1, radius * 0.8, radius * 1.5));
+  // TA models face -z, so put the camera on that side to see the unit's front.
+  camera.position.copy(center).add(new THREE.Vector3(radius * 1.1, radius * 0.8, -radius * 1.5));
   camera.near = radius / 100;
   camera.far = radius * 100;
   camera.updateProjectionMatrix();
@@ -183,22 +228,146 @@ function applyWireframe(): void {
   });
 }
 
-/**
- * Until unit scripts run (Phase 4), muzzle-flash pieces show as solid blobs. A unit's Create script
- * normally hides them; this is a viewer-only stand-in going by the usual piece names.
- */
-const FLASH_PIECE = /fl(a?sh|are)|fire|muzzle/i;
-function applyFlashes(): void {
-  current?.pieces.forEach((g, name) => {
-    const mesh = g.children.find((c) => c instanceof THREE.Mesh);
-    if (mesh) mesh.visible = !(flashEl.checked && FLASH_PIECE.test(name));
+// --- Unit script ------------------------------------------------------------
+let walking = false;
+let building = false;
+let open = false;
+let dying = false;
+
+function startScripts(cob: ReturnType<typeof parseCob> | undefined): void {
+  walking = building = open = dying = false;
+  renderActionState();
+  if (!cob || !currentRoot) {
+    scripts = undefined;
+    setScriptInfo('This unit has no script.');
+    return;
+  }
+  scripts = new UnitScripts(cob, currentRoot, new Rng(12345));
+  scripts.start('Create');
+  setScriptInfo(`Script: ${cob.functions.length} functions. Ran Create.`);
+}
+
+function run(name: string, params: number[] = []): void {
+  if (!scripts) return;
+  if (!scripts.vm.hasFunction(name)) {
+    setScriptInfo(`This unit's script has no ${name}.`);
+    return;
+  }
+  scripts.start(name, params);
+  setScriptInfo(`Ran ${name}${params.length ? `(${params.join(', ')})` : ''}.`);
+}
+
+function setScriptInfo(text: string): void {
+  const errors = scripts?.vm.errors ?? [];
+  scriptInfoEl.textContent = errors.length ? `${text} Script errors: ${errors.join('; ')}` : text;
+}
+
+function renderActionState(): void {
+  $('aWalk').classList.toggle('on', walking);
+  $('aBuild').classList.toggle('on', building);
+  $('aOpen').classList.toggle('on', open);
+}
+
+/** Random aim within the front half, in COB angle units (65536 per turn). */
+const rng = new Rng(777);
+function randomHeading(): number {
+  return rng.int(-16384, 16384);
+}
+
+$('aWalk').addEventListener('click', () => {
+  walking = !walking;
+  run(walking ? 'StartMoving' : 'StopMoving');
+  renderActionState();
+});
+$('aAim').addEventListener('click', () => {
+  const heading = randomHeading();
+  const pitch = rng.int(0, 6000);
+  run('AimPrimary', [heading, pitch]);
+});
+$('aFire').addEventListener('click', () => run('FirePrimary'));
+$('aBuild').addEventListener('click', () => {
+  building = !building;
+  if (building) run('StartBuilding', [randomHeading(), 0]);
+  else run('StopBuilding');
+  if (scripts) scripts.state.inBuildStance = building;
+  renderActionState();
+});
+$('aOpen').addEventListener('click', () => {
+  open = !open;
+  if (scripts) scripts.state.activated = open;
+  run(open ? 'Activate' : 'Deactivate');
+  renderActionState();
+});
+$('aDie').addEventListener('click', () => {
+  if (!scripts || dying) return;
+  if (!scripts.vm.hasFunction('Killed')) {
+    setScriptInfo('This unit has no Killed script (Commanders die with a special blast).');
+    return;
+  }
+  dying = true;
+  run('Killed', [100, 0]); // severity 100%: the most violent death
+});
+$('aReset').addEventListener('click', () => {
+  if (currentRow) void showUnit(currentRow);
+});
+
+// --- Debris (renderer-only effect for explode) ----------------------------------
+interface Debris {
+  obj: THREE.Object3D;
+  vel: THREE.Vector3;
+  spin: THREE.Vector3;
+  life: number;
+}
+let debris: Debris[] = [];
+
+function spawnDebris(pieceName: string, type: number): void {
+  if (!current) return;
+  const g = current.pieces.get(pieceName.toLowerCase());
+  const mesh = g?.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh);
+  if (!g || !mesh) return;
+  // BITMAPONLY means "just the explosion graphic": the piece itself doesn't fly off.
+  if (type & ExplodeType.BITMAPONLY) return;
+  const copy = new THREE.Mesh(mesh.geometry, mesh.material);
+  g.updateWorldMatrix(true, false);
+  g.matrixWorld.decompose(copy.position, copy.quaternion, copy.scale);
+  scene.add(copy);
+  const fall = (type & ExplodeType.FALL) !== 0;
+  const speed = fall ? 15 : 60;
+  debris.push({
+    obj: copy,
+    vel: new THREE.Vector3((Math.random() - 0.5) * speed, fall ? 10 : 40 + Math.random() * 40, (Math.random() - 0.5) * speed),
+    spin: new THREE.Vector3(Math.random() * 6 - 3, Math.random() * 6 - 3, Math.random() * 6 - 3),
+    life: 3,
   });
+}
+
+function updateDebris(dt: number): void {
+  const floor = grid.position.y;
+  for (const d of debris) {
+    d.vel.y -= 120 * dt;
+    d.obj.position.addScaledVector(d.vel, dt);
+    d.obj.rotation.x += d.spin.x * dt;
+    d.obj.rotation.y += d.spin.y * dt;
+    d.obj.rotation.z += d.spin.z * dt;
+    if (d.obj.position.y < floor) {
+      d.obj.position.y = floor;
+      d.vel.set(d.vel.x * 0.4, -d.vel.y * 0.3, d.vel.z * 0.4);
+      d.spin.multiplyScalar(0.5);
+    }
+    d.life -= dt;
+  }
+  for (const d of debris) if (d.life <= 0) scene.remove(d.obj);
+  debris = debris.filter((d) => d.life > 0);
+}
+
+function clearDebris(): void {
+  for (const d of debris) scene.remove(d.obj);
+  debris = [];
 }
 
 // --- Controls ---------------------------------------------------------------
 filterEl.addEventListener('input', renderList);
 wireEl.addEventListener('change', applyWireframe);
-flashEl.addEventListener('change', applyFlashes);
 $<HTMLInputElement>('picker').addEventListener('change', (ev) => {
   const files = (ev.target as HTMLInputElement).files ?? [];
   void load(() => openPickedVfs(files), 'That folder has no .hpi/.ufo/.ccx/.gp3 files.');
