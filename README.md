@@ -9,4 +9,4 @@ npm test
 npm run ta -- fbi ARMCOM   # print a unit's definition as JSON
 ```
 
-With the dev server running, http://localhost:5173/archives.html browses every file in your archives.
+With the dev server running, http://localhost:5173/archives.html browses every file in your archives and http://localhost:5173/models.html shows any unit in 3D.

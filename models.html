@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TA Model Viewer</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0d110d; --panel: #151b15; --line: #2a352a; --text: #d6e6d6; --dim: #7f947f; --accent: #8f8; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
+      body { display: grid; grid-template-columns: minmax(240px, 300px) 1fr; }
+      #side { display: grid; grid-template-rows: auto auto 1fr auto; border-right: 1px solid var(--line); min-height: 0; height: 100vh; }
+      #side h1 { font-size: 14px; margin: 0; padding: 8px 10px; color: var(--accent); }
+      #status { padding: 0 10px 6px; color: var(--dim); }
+      #controls { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+      #list { overflow: auto; min-height: 0; }
+      #list div { padding: 2px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #list div:hover { background: var(--panel); }
+      #list div.sel { background: #234023; }
+      #list .meta { color: var(--dim); }
+      #info { padding: 6px 10px; border-top: 1px solid var(--line); color: var(--dim); max-height: 30vh; overflow: auto; }
+      #view { position: relative; min-width: 0; }
+      #view canvas { display: block; width: 100%; height: 100%; }
+      #hint { position: absolute; bottom: 8px; left: 10px; color: var(--dim); pointer-events: none; }
+      button, input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 3px 6px; border-radius: 3px; }
+      .row { display: flex; gap: 6px; align-items: center; }
+      #swatches { display: flex; gap: 3px; }
+      #swatches button { width: 20px; height: 20px; padding: 0; }
+      #swatches button.on { outline: 2px solid #fff; }
+    </style>
+  </head>
+  <body>
+    <aside id="side">
+      <h1>TA Model Viewer <a href="/archives.html" style="color: var(--dim); font-size: 11px">archives</a></h1>
+      <div id="status">Loading…</div>
+      <div id="controls">
+        <input id="filter" type="search" placeholder="Filter units…" />
+        <div class="row">Team colour <span id="swatches"></span></div>
+        <label class="row"><input id="wire" type="checkbox" /> Wireframe</label>
+        <label class="row"><input id="spin" type="checkbox" checked /> Turntable</label>
+        <label class="row" title="Unit scripts hide these until a weapon fires (Phase 4)"><input id="flash" type="checkbox" checked /> Hide muzzle flashes</label>
+        <label class="row">or open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
+      </div>
+      <div id="list"></div>
+      <div id="info"></div>
+    </aside>
+    <main id="view"><div id="hint">Drag to rotate, scroll to zoom, right-drag to pan.</div></main>
+    <script type="module" src="/src/debug/models.ts"></script>
+  </body>
+</html>

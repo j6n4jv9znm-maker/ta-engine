@@ -66,7 +66,11 @@ export default defineConfig({
   server: { port: 5173 },
   build: {
     rollupOptions: {
-      input: { main: resolve(__dirname, 'index.html'), archives: resolve(__dirname, 'archives.html') },
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        archives: resolve(__dirname, 'archives.html'),
+        models: resolve(__dirname, 'models.html'),
+      },
     },
   },
   test: {
