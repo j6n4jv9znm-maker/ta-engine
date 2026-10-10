@@ -19,11 +19,12 @@ TypeScript (strict) + Vite + Three.js (WebGL) in the browser for development, Vi
 - `npm run typecheck`: TypeScript check
 - `npm run build`: typecheck and production build
 - `npm run ta -- <command>`: data CLI (`archives`, `ls`, `extract`, `cat`, `tdf`, `fbi ARMCOM`, `units`, `palette`); extracted files go to the gitignored `extracted/`
-- Debug pages (dev server): http://localhost:5173/archives.html
+- Debug pages (dev server): http://localhost:5173/archives.html (files, FBI JSON, GAF sprites), http://localhost:5173/models.html (unit model viewer)
 
 ## Layout
 - `src/`: engine source (`main.ts` is the browser entry)
-  - `formats/`: file-format parsers (HPI archives, TDF text, palette)
+  - `formats/`: file-format parsers (HPI archives, TDF text, palette, GAF sprites, 3DO models)
+  - `graphics/`: renderer-side code (textures, model geometry, Three.js model builder)
   - `io/`: byte sources for Node, browser files and the dev server
   - `vfs.ts`: layers archives in TA's load order (.hpi < .ufo < .ccx < .gpf < .gp3)
   - `debug/`: debug viewer pages

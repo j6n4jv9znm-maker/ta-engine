@@ -1,14 +1,15 @@
 /*
- * Debug page for Phase 1: browse the layered archives, extract any file, view any unit's FBI as JSON.
+ * Debug page: browse the layered archives, extract any file, view any unit's FBI as JSON, and preview
+ * GAF sprites frame by frame.
  * Reads data/ through the dev server when available, or a folder you pick in the browser.
  */
+import { frameToRgba, parseGaf, type GafEntry } from '../formats/gaf';
 import { latin1 } from '../formats/hpi';
-import { parsePalette } from '../formats/palette';
+import { parsePalette, PALETTE_PATH, type Palette } from '../formats/palette';
 import { getBlock, getValue, parseTdfWithWarnings } from '../formats/tdf';
-import { BlobSource, type ByteSource } from '../io/byteSource';
-import { HttpRangeSource } from '../io/httpSource';
 import { listUnitFiles } from '../units';
-import { isArchiveName, Vfs, type VfsFile } from '../vfs';
+import type { Vfs, VfsFile } from '../vfs';
+import { openDevServerVfs, openPickedVfs } from './devData';
 
 type Tab = 'files' | 'units' | 'archives';
 
@@ -19,6 +20,7 @@ const rightEl = $('right');
 const filterEl = $<HTMLInputElement>('filter');
 
 let vfs: Vfs | undefined;
+let palette: Palette | undefined;
 let tab: Tab = 'files';
 interface UnitRow {
   path: string;
@@ -31,36 +33,27 @@ let units: UnitRow[] | undefined;
 const TDF_EXT = /\.(tdf|fbi|ota|gui)$/i;
 const TEXT_EXT = /\.(txt|tdf|fbi|ota|gui|bos|h|ini|inf|bat|pl)$/i;
 
-async function load(sources: ByteSource[], from: string): Promise<void> {
-  statusEl.textContent = `Opening ${sources.length} archives…`;
+async function load(open: () => Promise<Vfs | undefined>, from: string, none: string): Promise<void> {
+  statusEl.textContent = 'Opening archives…';
   try {
-    vfs = await Vfs.fromSources(sources);
+    const v = await open();
+    if (!v) {
+      statusEl.textContent = none;
+      return;
+    }
+    vfs = v;
     units = undefined;
-    statusEl.textContent = `${vfs.archives.length} archives, ${vfs.fileCount} files (${from})`;
+    palette = v.exists(PALETTE_PATH) ? parsePalette(await v.read(PALETTE_PATH)) : undefined;
+    statusEl.textContent = `${v.archives.length} archives, ${v.fileCount} files (${from})`;
     render();
   } catch (e) {
     statusEl.innerHTML = `<span class="err">${esc(String(e))}</span>`;
   }
 }
 
-async function loadFromDevServer(): Promise<void> {
-  try {
-    const res = await fetch('/__ta-data/');
-    const list = (await res.json()) as { name: string; size: number }[];
-    if (list.length === 0) throw new Error('empty');
-    await load(
-      list.map((a) => new HttpRangeSource(a.name, a.size, `/__ta-data/${encodeURIComponent(a.name)}`)),
-      'data/ folder',
-    );
-  } catch {
-    statusEl.textContent = 'No data/ folder found. Pick your TA folder instead.';
-  }
-}
-
 $<HTMLInputElement>('picker').addEventListener('change', (ev) => {
-  const files = [...((ev.target as HTMLInputElement).files ?? [])].filter((f) => isArchiveName(f.name));
-  if (files.length) void load(files.map((f) => new BlobSource(f.name, f)), 'picked folder');
-  else statusEl.textContent = 'That folder has no .hpi/.ufo/.ccx/.gp3 files.';
+  const files = (ev.target as HTMLInputElement).files ?? [];
+  void load(() => openPickedVfs(files), 'picked folder', 'That folder has no .hpi/.ufo/.ccx/.gp3 files.');
 });
 
 for (const b of document.querySelectorAll<HTMLButtonElement>('#tabs button')) {
@@ -160,7 +153,13 @@ async function showFile(v: Vfs, f: VfsFile): Promise<void> {
   $('dl').addEventListener('click', () => download(f.entry.name, bytes));
   const body = $('body');
 
-  if (/\.pal$/i.test(f.path) && bytes.length >= 1024) {
+  if (/\.gaf$/i.test(f.path) && palette) {
+    try {
+      showGaf(body, parseGaf(bytes), palette);
+    } catch (e) {
+      body.innerHTML = `<p class="err">${esc(String(e))}</p>`;
+    }
+  } else if (/\.pal$/i.test(f.path) && bytes.length >= 1024) {
     const pal = parsePalette(bytes);
     const grid = document.createElement('div');
     grid.id = 'pal';
@@ -181,6 +180,46 @@ async function showFile(v: Vfs, f: VfsFile): Promise<void> {
   } else {
     body.innerHTML = `<div class="dim">Binary file. First bytes:</div><pre>${esc(hexDump(bytes.subarray(0, 512)))}</pre>`;
   }
+}
+
+let gafTimer: number | undefined;
+
+/** Lists a GAF's entries; clicking one plays its frames on a canvas. */
+function showGaf(body: HTMLElement, entries: GafEntry[], pal: Palette): void {
+  body.innerHTML = `<div class="dim">${entries.length} entries. Click one to play it.</div>
+    <div style="display:flex;gap:16px;margin-top:8px">
+      <div id="gafList" style="min-width:180px"></div>
+      <div><canvas id="gafCanvas" style="image-rendering:pixelated;background:#335;width:256px"></canvas>
+      <div id="gafInfo" class="dim"></div></div>
+    </div>`;
+  const listDiv = $('gafList');
+  const canvas = $<HTMLCanvasElement>('gafCanvas');
+  const info = $('gafInfo');
+  const play = (e: GafEntry) => {
+    window.clearInterval(gafTimer);
+    let i = 0;
+    const draw = () => {
+      const fr = e.frames[i % e.frames.length];
+      if (!fr) return;
+      canvas.width = Math.max(1, fr.width);
+      canvas.height = Math.max(1, fr.height);
+      canvas.style.width = `${Math.min(512, fr.width * 4)}px`;
+      const img = new ImageData(new Uint8ClampedArray(frameToRgba(fr, pal)), canvas.width, canvas.height);
+      canvas.getContext('2d')!.putImageData(img, 0, 0);
+      info.textContent = `${e.name}: frame ${(i % e.frames.length) + 1}/${e.frames.length}, ${fr.width}x${fr.height}, ${fr.layers.length} layer(s)`;
+      i++;
+    };
+    draw();
+    if (e.frames.length > 1) gafTimer = window.setInterval(draw, 100);
+  };
+  for (const e of entries) {
+    const d = document.createElement('div');
+    d.style.cursor = 'pointer';
+    d.textContent = `${e.name} (${e.frames.length})`;
+    d.addEventListener('click', () => play(e));
+    listDiv.append(d);
+  }
+  if (entries[0]) play(entries[0]);
 }
 
 function looksLikeText(bytes: Uint8Array): boolean {
@@ -220,4 +259,4 @@ function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
 
-void loadFromDevServer();
+void load(openDevServerVfs, 'data/ folder', 'No data/ folder found. Pick your TA folder instead.');
