@@ -70,6 +70,7 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         archives: resolve(__dirname, 'archives.html'),
         models: resolve(__dirname, 'models.html'),
+        maps: resolve(__dirname, 'maps.html'),
       },
     },
   },

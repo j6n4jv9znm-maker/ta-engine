@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TA Map Viewer</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0d110d; --panel: #151b15; --line: #2a352a; --text: #d6e6d6; --dim: #7f947f; --accent: #8f8; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
+      body { display: grid; grid-template-columns: minmax(240px, 300px) 1fr; }
+      #side { display: grid; grid-template-rows: auto auto auto 1fr auto; border-right: 1px solid var(--line); min-height: 0; height: 100vh; }
+      #side h1 { font-size: 14px; margin: 0; padding: 8px 10px; color: var(--accent); }
+      #side h1 a { color: var(--dim); font-size: 11px; }
+      #status { padding: 0 10px 6px; color: var(--dim); }
+      #controls { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+      #list { overflow: auto; min-height: 0; }
+      #list div { padding: 2px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #list div:hover { background: var(--panel); }
+      #list div.sel { background: #234023; }
+      #list .meta { color: var(--dim); }
+      #info { padding: 6px 10px; border-top: 1px solid var(--line); color: var(--dim); max-height: 28vh; overflow: auto; }
+      #view { position: relative; min-width: 0; }
+      #view canvas.main { display: block; width: 100%; height: 100%; }
+      #minimap { position: absolute; top: 10px; right: 10px; border: 1px solid #000; outline: 1px solid var(--line); cursor: crosshair; image-rendering: pixelated; max-width: 30%; }
+      #hint { position: absolute; bottom: 8px; left: 10px; color: var(--dim); pointer-events: none; text-shadow: 0 0 3px #000; }
+      button, input { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 3px 6px; border-radius: 3px; }
+      .row { display: flex; gap: 6px; align-items: center; }
+    </style>
+  </head>
+  <body>
+    <aside id="side">
+      <h1>TA Map Viewer <a href="/models.html">models</a> <a href="/archives.html">archives</a></h1>
+      <div id="status">Loading…</div>
+      <div id="controls">
+        <input id="filter" type="search" placeholder="Filter maps…" />
+        <label class="row"><input id="feat" type="checkbox" checked /> Trees, rocks and wrecks</label>
+        <label class="row"><input id="starts" type="checkbox" checked /> Start positions</label>
+        <label class="row"><input id="edge" type="checkbox" checked /> Edge scrolling</label>
+        <label class="row"><input id="wire" type="checkbox" /> Wireframe</label>
+        <label class="row">or open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
+      </div>
+      <div></div>
+      <div id="list"></div>
+      <div id="info"></div>
+    </aside>
+    <main id="view">
+      <canvas id="minimap" title="Click to jump"></canvas>
+      <div id="hint">WASD / arrows / screen edge to pan · wheel to zoom · right-drag to pan · Q/E rotate, R reset</div>
+    </main>
+    <script type="module" src="/src/debug/maps.ts"></script>
+  </body>
+</html>
