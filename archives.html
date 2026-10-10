@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TA Archive Viewer</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0d110d; --panel: #151b15; --line: #2a352a; --text: #d6e6d6; --dim: #7f947f; --accent: #8f8; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 ui-monospace, Menlo, monospace; }
+      body { display: grid; grid-template-rows: auto 1fr; }
+      header { display: flex; gap: 12px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+      header h1 { font-size: 14px; margin: 0; color: var(--accent); }
+      main { display: grid; grid-template-columns: minmax(280px, 38%) 1fr; min-height: 0; }
+      #left { display: grid; grid-template-rows: auto auto 1fr; border-right: 1px solid var(--line); min-height: 0; }
+      #tabs, #filterRow { display: flex; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+      #list { overflow: auto; min-height: 0; }
+      #list div { padding: 2px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #list div:hover { background: var(--panel); }
+      #list div.sel { background: #234023; }
+      #list .meta { color: var(--dim); }
+      #right { overflow: auto; padding: 10px 14px; min-height: 0; }
+      button, input { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 3px 8px; border-radius: 3px; }
+      button.on { border-color: var(--accent); color: var(--accent); }
+      input[type='search'] { flex: 1; }
+      pre { white-space: pre-wrap; word-break: break-all; margin: 8px 0; }
+      .dim { color: var(--dim); }
+      .err { color: #f88; }
+      #pal { display: grid; grid-template-columns: repeat(16, 28px); gap: 2px; margin-top: 8px; }
+      #pal div { width: 28px; height: 28px; font-size: 9px; display: flex; align-items: end; justify-content: end; padding: 1px; text-shadow: 0 0 2px #000; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>TA Archive Viewer</h1>
+      <span id="status" class="dim">Loading…</span>
+      <label>or open your TA folder: <input id="picker" type="file" webkitdirectory multiple /></label>
+    </header>
+    <main>
+      <section id="left">
+        <div id="tabs">
+          <button data-tab="files" class="on">Files</button>
+          <button data-tab="units">Units</button>
+          <button data-tab="archives">Archives</button>
+        </div>
+        <div id="filterRow"><input id="filter" type="search" placeholder="Filter…" /></div>
+        <div id="list"></div>
+      </section>
+      <section id="right"><p class="dim">Pick a file or unit on the left.</p></section>
+    </main>
+    <script type="module" src="/src/debug/archives.ts"></script>
+  </body>
+</html>

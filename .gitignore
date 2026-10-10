@@ -1,6 +1,8 @@
 # Original game data (Cavedog assets) must never be committed.
 /data/*
 !/data/README.md
+# Files pulled out of the archives by the CLI are game data too.
+/extracted/
 
 node_modules/
 dist/
