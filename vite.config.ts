@@ -71,6 +71,7 @@ export default defineConfig({
         archives: resolve(__dirname, 'archives.html'),
         models: resolve(__dirname, 'models.html'),
         maps: resolve(__dirname, 'maps.html'),
+        game: resolve(__dirname, 'game.html'),
       },
     },
   },

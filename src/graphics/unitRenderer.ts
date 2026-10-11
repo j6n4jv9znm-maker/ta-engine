@@ -14,6 +14,8 @@ import { createUnitModel, type UnitModel } from './threeModel';
  */
 
 interface Drawn {
+  /** Carries the unit's position and heading; the model's root piece inside it is posed by scripts. */
+  holder: THREE.Group;
   model: UnitModel;
   ring: THREE.Mesh;
 }
@@ -38,7 +40,7 @@ export class UnitRenderer {
   update(world: World, alpha: number, selected: ReadonlySet<number>): void {
     for (const [id, d] of this.drawn) {
       if (!world.units.has(id)) {
-        this.group.remove(d.model.root, d.ring);
+        this.group.remove(d.holder, d.ring);
         this.drawn.delete(id);
       }
     }
@@ -49,13 +51,13 @@ export class UnitRenderer {
         if (!made) continue;
         d = made;
         this.drawn.set(u.id, d);
-        this.group.add(d.model.root, d.ring);
+        this.group.add(d.holder, d.ring);
       }
       const x = u.prevX + (u.x - u.prevX) * alpha;
       const y = u.prevY + (u.y - u.prevY) * alpha;
       const z = u.prevZ + (u.z - u.prevZ) * alpha;
-      d.model.root.position.set(x, y, z);
-      d.model.root.rotation.y = angleToRadians(lerpAngle(u.prevRotation, u.rotation, alpha));
+      d.holder.position.set(x, y, z);
+      d.holder.rotation.y = angleToRadians(lerpAngle(u.prevRotation, u.rotation, alpha));
       if (u.scripts) applyPose(d.model, u.scripts.pieces);
       d.ring.visible = selected.has(u.id);
       if (d.ring.visible) d.ring.position.set(x, y + 1, z);
@@ -76,7 +78,10 @@ export class UnitRenderer {
     const r = (Math.max(u.def.footprintX, u.def.footprintZ) * 16) / 2 + 4;
     ring.scale.set(r, 1, r);
     ring.renderOrder = 2;
-    return { model: cloneModel(template), ring };
+    const model = cloneModel(template);
+    const holder = new THREE.Group();
+    holder.add(model.root);
+    return { holder, model, ring };
   }
 
   dispose(): void {
