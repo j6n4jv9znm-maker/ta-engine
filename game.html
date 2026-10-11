@@ -63,6 +63,11 @@
       .save-row button:first-child { flex: 1; text-align: left; font-size: 11px; }
       #loading { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0, 0, 0, 0.8); font-size: 18px; color: var(--accent); }
       #loading[hidden] { display: none; }
+      #welcome { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: radial-gradient(circle at 50% 30%, #1b261b, #050805 75%); }
+      #welcome[hidden] { display: none; }
+      .welcome-box { width: min(560px, 92vw); text-align: center; display: flex; flex-direction: column; gap: 14px; }
+      .welcome-box h1 { font-size: 30px; letter-spacing: 6px; text-transform: uppercase; color: var(--accent); }
+      .welcome-box .warn { color: #ffb347; min-height: 1.4em; }
     </style>
   </head>
   <body>
@@ -93,6 +98,14 @@
       </div>
       <div id="box"></div>
       <div id="loading" hidden>Loading saved game…</div>
+      <div id="welcome" hidden>
+        <div class="welcome-box">
+          <h1>Total Annihilation</h1>
+          <p>This app plays the original game using your own copy of its files. Choose the folder that has <b>totala1.hpi</b> in it (for the GOG version, the game's install folder).</p>
+          <button id="chooseFolder" class="big start">Choose your TA folder…</button>
+          <p id="welcomeError" class="warn"></p>
+        </div>
+      </div>
       <div id="hint">You are blue; the computer is red.</div>
     </main>
     <script type="module" src="/src/debug/game.ts"></script>

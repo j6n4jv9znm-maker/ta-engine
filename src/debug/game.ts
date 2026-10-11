@@ -32,6 +32,7 @@ import { EXPLORED, RADAR, SEEN, VIS_TILE } from '../sim/visibility';
 import { loadWeaponDefs, type WeaponDef } from '../sim/weaponDef';
 import { World, type SimFeature, type SimUnit, type UnitAssets } from '../sim/world';
 import type { Vfs } from '../vfs';
+import { appDataDir, chooseAppDataDir, inApp, openAppVfs } from '../io/appData';
 import { openDevServerVfs, openPickedVfs } from './devData';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -170,10 +171,17 @@ renderer.setAnimationLoop(frame);
 // --- Loading -------------------------------------------------------------------
 async function load(open: () => Promise<Vfs | undefined>, none: string): Promise<void> {
   statusEl.textContent = 'Opening archives…';
+  // Show loading progress over the whole window until the setup screen appears.
+  const progress = new MutationObserver(() => (loadingEl.textContent = statusEl.textContent));
+  progress.observe(statusEl, { childList: true, characterData: true, subtree: true });
+  loadingEl.textContent = statusEl.textContent;
+  loadingEl.hidden = false;
   try {
     const v = await open();
     if (!v) {
       statusEl.textContent = none;
+      progress.disconnect();
+      loadingEl.hidden = true;
       return;
     }
     vfs = v;
@@ -200,9 +208,13 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     document.body.append(setup.el);
     showSaves();
     setup.show(false);
+    progress.disconnect();
+    loadingEl.hidden = true;
     statusEl.textContent = 'Pick a map and press Start game.';
   } catch (e) {
     statusEl.textContent = String(e);
+    progress.disconnect();
+    loadingEl.hidden = true;
   }
 }
 
@@ -1026,4 +1038,29 @@ function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
 
-void load(openDevServerVfs, 'No data/ folder found. Pick your TA folder instead.');
+// In the Mac app, the game files come from the folder the player chose on first launch; on the
+// dev server, from data/.
+async function boot(): Promise<void> {
+  if (!inApp()) {
+    void load(openDevServerVfs, 'No data/ folder found. Pick your TA folder instead.');
+    return;
+  }
+  if (await appDataDir()) {
+    void load(openAppVfs, 'Your Total Annihilation folder has no game files any more.');
+    return;
+  }
+  const welcome = $('welcome');
+  welcome.hidden = false;
+  $('chooseFolder').addEventListener('click', () => {
+    $('welcomeError').textContent = '';
+    chooseAppDataDir().then(
+      (dir) => {
+        if (!dir) return;
+        welcome.hidden = true;
+        void load(openAppVfs, 'That folder has no game files.');
+      },
+      (err) => ($('welcomeError').textContent = String(err)),
+    );
+  });
+}
+void boot();
