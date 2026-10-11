@@ -59,8 +59,8 @@ export class GameAudio {
   }
 
   /** Forget per-game state (call when a new game starts). */
-  reset(): void {
-    this.lastTick = 0;
+  reset(tick = 0): void {
+    this.lastTick = tick;
     this.hp.clear();
     this.underAttackAt = -Infinity;
   }

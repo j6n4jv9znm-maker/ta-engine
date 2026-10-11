@@ -3,7 +3,7 @@ import { parseOta, type OtaInfo } from '../formats/ota';
 import type { Palette } from '../formats/palette';
 import { parseTdf } from '../formats/tdf';
 import { parseTnt, type TntMap } from '../formats/tnt';
-import type { Difficulty } from '../sim/ai/aiProfile';
+import type { SkirmishSettings } from '../sim/skirmish';
 import type { Vfs } from '../vfs';
 
 /*
@@ -11,14 +11,7 @@ import type { Vfs } from '../vfs';
  * the opponent and how to start, then Start. Plain DOM; it only reads map files.
  */
 
-export type Side = 'arm' | 'core';
-
-export interface GameSettings {
-  map: string;
-  side: Side;
-  opponent: Difficulty | 'none';
-  startWith: 'commander' | 'army';
-}
+export type GameSettings = SkirmishSettings;
 
 interface MapInfo {
   tnt: TntMap;

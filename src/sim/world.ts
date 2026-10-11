@@ -184,6 +184,8 @@ export class World {
   readonly featureDefs: Map<string, FeatureDef>;
   projectiles: Projectile[] = [];
   /** Recent things the renderer may want to show (explosions, shots, deaths); kept for a few seconds. */
+  /** Every recorded command and the tick it was given on (see issue). */
+  commandLog: { tick: number; cmd: Command }[] = [];
   events: CombatEvent[] = [];
   readonly visibility: Visibility;
   /** Players knocked out (their Commander died). */
@@ -238,9 +240,14 @@ export class World {
     });
   }
 
-  /** Queues a command for the next tick. */
-  issue(cmd: Command): void {
+  /**
+   * Queues a command for the next tick. Commands from outside the sim (the player) are recorded with
+   * their tick in `commandLog`, which is what a saved game replays; the AI's aren't, since it makes
+   * them again.
+   */
+  issue(cmd: Command, record = true): void {
     this.queue.push(cmd);
+    if (record) this.commandLog.push({ tick: this.tickCount, cmd: structuredClone(cmd) });
   }
 
   isFinished(u: SimUnit): boolean {

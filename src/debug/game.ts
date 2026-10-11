@@ -15,6 +15,7 @@ import { RtsCamera } from '../graphics/rtsCamera';
 import { parsePcx } from '../formats/pcx';
 import { GameAudio, type UnitSoundKey } from '../audio/gameAudio';
 import { SetupScreen, type GameSettings } from '../ui/setupScreen';
+import { addSave, deleteSave, describeSave, listSaves } from '../ui/saves';
 import { createTerrain, type Terrain } from '../graphics/terrain';
 import { loadTextureLibrary, type TextureLibrary } from '../graphics/textures';
 import { createUnitModel, type UnitModel } from '../graphics/threeModel';
@@ -23,7 +24,7 @@ import { loadFeatureDefinitions, type FeatureDef } from '../map/features';
 import { listMaps, loadGameMap, type GameMap } from '../map/mapData';
 import { UnitAssetLoader } from '../sim/assets';
 import { loadAiProfile, type AiPlan, type Difficulty } from '../sim/ai/aiProfile';
-import { SkirmishAi } from '../sim/ai/skirmishAi';
+import { createSkirmish, replayGame, saveGame, type SavedGame } from '../sim/skirmish';
 import { loadBuildMenus, type BuildMenus } from '../sim/buildMenus';
 import { TICKS_PER_SECOND } from '../sim/pieces';
 import { loadUnitDefs } from '../sim/unitDef';
@@ -42,24 +43,9 @@ const buildEl = $('build');
 const minimapEl = $<HTMLCanvasElement>('minimap');
 const boxEl = $('box');
 const view = $('view');
+const loadingEl = $('loading');
 
 const ME = 0;
-const ARMY: [string, number][] = [
-  ['ARMPW', 6],
-  ['ARMSTUMP', 4],
-  ['ARMFLASH', 4],
-  ['ARMJETH', 3],
-  ['ARMHAM', 3],
-  ['ARMROCK', 3],
-];
-const CORE_ARMY: [string, number][] = [
-  ['CORAK', 6],
-  ['CORRAID', 4],
-  ['CORGATOR', 4],
-  ['CORCRASH', 3],
-  ['CORTHUD', 3],
-  ['CORSTORM', 3],
-];
 const TEAM_COLOURS = [0, 1]; // blue for you, red for the other side
 
 let vfs: Vfs | undefined;
@@ -92,6 +78,7 @@ const selected = new Set<number>();
 let paused = false;
 let setup: SetupScreen | undefined;
 let settings: GameSettings | undefined;
+let seed = 0;
 let speed = 1;
 
 /** What a left-click does right now. */
@@ -211,6 +198,7 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     setup?.el.remove();
     setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined);
     document.body.append(setup.el);
+    showSaves();
     setup.show(false);
     statusEl.textContent = 'Pick a map and press Start game.';
   } catch (e) {
@@ -218,28 +206,23 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
   }
 }
 
-async function startGame(s: GameSettings): Promise<void> {
+async function startGame(s: GameSettings, save?: SavedGame): Promise<void> {
   if (!vfs || !palette || !lib || !featureDefs) return;
   settings = s;
   const mapName = s.map;
   statusEl.textContent = `Loading ${mapName}…`;
-  audio?.reset();
   const map = await loadGameMap(vfs, mapName, featureDefs);
-  const world = new World(map, { seed: 20261011, assets: (n) => assets.get(n.toLowerCase()), weapons, featureDefs });
-  const starts = map.ota?.schemas[0]?.startPositions.filter((p): p is { x: number; z: number } => !!p) ?? [];
-  const mine = starts[0] ?? { x: map.widthUnits / 2, z: map.heightUnits / 2 };
-  const theirs = starts[1];
-  const face = (z: number) => (z < map.heightUnits / 2 ? 0 : 32768);
-  const arm = s.side === 'arm';
-  world.spawn(assets.get(arm ? 'armcom' : 'corcom')!, ME, mine.x, mine.z, face(mine.z));
-  const armies = s.startWith === 'army';
-  if (armies) spawnGroup(world, arm ? ARMY : CORE_ARMY, ME, mine.x, mine.z + (mine.z < map.heightUnits / 2 ? 120 : -120));
-  if (theirs) {
-    world.spawn(assets.get(arm ? 'corcom' : 'armcom')!, 1, theirs.x, theirs.z, face(theirs.z));
-    if (armies) spawnGroup(world, arm ? CORE_ARMY : ARMY, 1, theirs.x, theirs.z + (theirs.z < map.heightUnits / 2 ? 120 : -120));
+  seed = save?.seed ?? (Math.random() * 2 ** 31) | 0;
+  const deps = { assets: (n: string) => assets.get(n.toLowerCase()), weapons, featureDefs, menus, aiPlans };
+  const { world, home: mine } = createSkirmish(map, s, seed, deps);
+  if (save) {
+    loadingEl.hidden = false;
+    await replayGame(world, save, (f) => (loadingEl.textContent = `Loading saved game… ${Math.round(f * 100)}%`));
+    loadingEl.hidden = true;
   }
-  const difficulty = s.opponent;
-  if (difficulty !== 'none') world.ais.push(new SkirmishAi(1, difficulty, menus, aiPlans.get(difficulty), 977));
+  audio?.reset(world.tickCount);
+  paused = false;
+  $('pause').textContent = 'Pause';
 
   const terrain = createTerrain(map.tnt, palette);
   const sprites = await createFeatureSprites(vfs, palette, map.features);
@@ -267,14 +250,6 @@ async function startGame(s: GameSettings): Promise<void> {
   statusEl.textContent = `${mapName}`;
 }
 
-function spawnGroup(world: World, list: [string, number][], owner: number, x: number, z: number): void {
-  let i = 0;
-  for (const [name, count] of list) {
-    const a = assets.get(name.toLowerCase());
-    if (!a) continue;
-    for (let k = 0; k < count; k++, i++) world.spawn(a, owner, x + ((i % 6) - 2.5) * 48, z + Math.floor(i / 6) * 48);
-  }
-}
 
 function stopGame(): void {
   if (!game) return;
@@ -808,6 +783,43 @@ function refreshPanel(): void {
   buildEl.append(grid);
 }
 
+/** The saved-games list on the setup screen. */
+function showSaves(): void {
+  if (!setup) return;
+  const slot = setup.slot;
+  slot.textContent = '';
+  const saves = listSaves();
+  if (!saves.length) return;
+  const h = document.createElement('h2');
+  h.textContent = 'Saved games';
+  slot.append(h);
+  for (const save of saves) {
+    const row = document.createElement('div');
+    row.className = 'save-row';
+    const load = document.createElement('button');
+    load.textContent = describeSave(save);
+    load.title = 'Load this game';
+    load.addEventListener('click', () => {
+      setup!.hide();
+      void startGame(save.settings, save);
+    });
+    const del = document.createElement('button');
+    del.textContent = '×';
+    del.title = 'Delete this save';
+    del.addEventListener('click', () => {
+      deleteSave(save.savedAt);
+      showSaves();
+    });
+    row.append(load, del);
+    slot.append(row);
+  }
+}
+
+function clockText(tick: number): string {
+  const secs = Math.floor(tick / 30);
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+}
+
 // Build-menu pictures (unitpics/<name>.pcx), decoded once and kept as data URLs.
 const unitPics = new Map<string, string | null>();
 function unitPic(name: string): string | undefined {
@@ -980,6 +992,12 @@ document.addEventListener('change', (e) => (e.target as HTMLElement).tagName ===
 document.addEventListener('click', (e) => (e.target as HTMLElement).closest('button')?.blur());
 canvas.addEventListener('mousedown', () => (document.activeElement as HTMLElement | null)?.blur?.());
 $('restart').addEventListener('click', () => settings && void startGame(settings));
+$('save').addEventListener('click', () => {
+  if (!game || !settings) return;
+  const ok = addSave(saveGame(game.world, settings, seed));
+  statusEl.textContent = ok ? `Saved at ${clockText(game.world.tickCount)}. Load it from Menu.` : 'Could not save (storage full?).';
+  showSaves();
+});
 $('menu').addEventListener('click', () => setup?.show(!!game));
 $<HTMLInputElement>('edge').addEventListener('change', (e) => {
   rts.edgeScroll = (e.target as HTMLInputElement).checked;

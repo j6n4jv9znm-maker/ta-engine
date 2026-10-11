@@ -58,13 +58,18 @@
       button.big { font-size: 16px; padding: 12px; }
       button.big.start { border-color: var(--accent); color: var(--accent); background: #1d2c1d; }
       button[hidden] { display: none; }
+      .setup-slot { display: flex; flex-direction: column; gap: 4px; max-height: 36vh; overflow: auto; }
+      .save-row { display: flex; gap: 4px; }
+      .save-row button:first-child { flex: 1; text-align: left; font-size: 11px; }
+      #loading { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0, 0, 0, 0.8); font-size: 18px; color: var(--accent); }
+      #loading[hidden] { display: none; }
     </style>
   </head>
   <body>
     <aside id="side">
       <h1>Total Annihilation <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
       <div id="status">Loading…</div>
-      <div class="row"><button id="menu">Menu</button> <button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button> <button id="sound" class="on">Sound on</button></div>
+      <div class="row"><button id="menu">Menu</button> <button id="save">Save</button> <button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button> <button id="sound" class="on">Sound on</button></div>
       <label class="row"><input id="edge" type="checkbox" /> Edge scrolling</label>
       <div id="clock" class="dim"></div>
       <div id="selInfo" class="dim">Nothing selected.</div>
@@ -87,6 +92,7 @@
         <div class="res energy"><span>Energy</span><div class="bar"><div class="fill" id="eFill"></div></div><span id="eText"></span></div>
       </div>
       <div id="box"></div>
+      <div id="loading" hidden>Loading saved game…</div>
       <div id="hint">You are blue; the computer is red.</div>
     </main>
     <script type="module" src="/src/debug/game.ts"></script>
