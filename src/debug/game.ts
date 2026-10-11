@@ -907,6 +907,11 @@ minimapEl.addEventListener('mousedown', (e) => {
 minimapEl.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // --- Controls ---------------------------------------------------------------------------
+// Hand the keyboard back to the game after using a control. Otherwise a focused menu or button keeps
+// it: the arrow keys would change the map (restarting the game) and Space would press Restart.
+document.addEventListener('change', (e) => (e.target as HTMLElement).tagName === 'SELECT' && (e.target as HTMLElement).blur());
+document.addEventListener('click', (e) => (e.target as HTMLElement).closest('button')?.blur());
+canvas.addEventListener('mousedown', () => (document.activeElement as HTMLElement | null)?.blur?.());
 mapSel.addEventListener('change', () => void startGame(mapSel.value));
 startWithSel.addEventListener('change', () => void startGame(mapSel.value));
 opponentSel.addEventListener('change', () => void startGame(mapSel.value));

@@ -88,11 +88,30 @@ export class RtsCamera {
     });
     on(window, 'mouseup', () => (this.drag = undefined));
     on(el, 'contextmenu', (e: MouseEvent) => e.preventDefault());
+    // Safari reports trackpad pinches as gesture events rather than ctrl+wheel.
+    type Gesture = UIEvent & { scale: number; clientX: number; clientY: number };
+    on(el, 'gesturestart', (e: Gesture) => {
+      e.preventDefault();
+      this.gestureScale = 1;
+    });
+    on(el, 'gesturechange', (e: Gesture) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const px = this.mouse?.x ?? r.width / 2;
+      const py = this.mouse?.y ?? r.height / 2;
+      this.zoomAt((this.distance * this.gestureScale) / Math.max(0.05, e.scale), px, py);
+      this.gestureScale = e.scale;
+    });
+    on(el, 'gestureend', (e: Gesture) => e.preventDefault());
     on(el, 'wheel', (e: WheelEvent) => {
       e.preventDefault();
       // Mac trackpads send two-finger swipes as wheel events too. Pinch (which arrives with ctrlKey)
       // and real mouse wheels zoom; a two-finger swipe pans, so it doesn't fling the camera away.
-      const mouseWheel = e.deltaMode !== 0 || (e.deltaX === 0 && Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 40);
+      // A trackpad gives itself away with sideways or fractional deltas; once one has been seen,
+      // treat the following wheel events as swipes too (a fast straight swipe can look like a wheel).
+      const now = performance.now();
+      if (e.deltaX !== 0 || !Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 40) this.trackpadAt = now;
+      const mouseWheel = e.deltaMode !== 0 || (now - this.trackpadAt > 1500 && Math.abs(e.deltaY) >= 40);
       if (e.ctrlKey || mouseWheel) {
         const amount = e.ctrlKey ? e.deltaY * 0.01 : Math.sign(e.deltaY) * 0.15;
         const r = el.getBoundingClientRect();
@@ -102,6 +121,9 @@ export class RtsCamera {
       }
     });
   }
+
+  private trackpadAt = -Infinity;
+  private gestureScale = 1;
 
   setMap(opts: RtsCameraOptions): void {
     this.opts = opts;
