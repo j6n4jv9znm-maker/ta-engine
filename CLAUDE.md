@@ -19,12 +19,12 @@ TypeScript (strict) + Vite + Three.js (WebGL) in the browser for development, Vi
 - `npm run typecheck`: TypeScript check
 - `npm run build`: typecheck and production build
 - `npm run ta -- <command>`: data CLI (`archives`, `ls`, `extract`, `cat`, `tdf`, `fbi ARMCOM`, `units`, `palette`); extracted files go to the gitignored `extracted/`
-- Debug pages (dev server): http://localhost:5173/archives.html (files, FBI JSON, GAF sprites), http://localhost:5173/models.html (unit model viewer; runs unit scripts: walk, aim, fire, build, open, die), http://localhost:5173/maps.html (map viewer), http://localhost:5173/game.html (sandbox: select and move units on a real map)
+- Debug pages (dev server): http://localhost:5173/archives.html (files, FBI JSON, GAF sprites), http://localhost:5173/models.html (unit model viewer; runs unit scripts: walk, aim, fire, build, open, die), http://localhost:5173/maps.html (map viewer), http://localhost:5173/game.html (sandbox: start with a Commander, build a base and an army, move units)
 
 ## Layout
 - `src/`: engine source (`main.ts` is the browser entry)
   - `formats/`: file-format parsers (HPI archives, TDF text, palette, GAF sprites, 3DO models, TNT maps, OTA map settings, COB unit scripts)
-  - `sim/`: simulation (deterministic, 30 Hz, no rendering): seeded RNG, piece animation, COB unit-script VM (`sim/cob/`), per-unit script runner, unit definitions, terrain movement rules, A* pathfinding, and `world.ts` (the game loop: units, commands, steering, collisions)
+  - `sim/`: simulation (deterministic, 30 Hz, no rendering): seeded RNG, piece animation, COB unit-script VM (`sim/cob/`), per-unit script runner, unit definitions, terrain movement rules, A* pathfinding, economy (`economy.ts`), build menus, and `world.ts` (the game loop: units, commands, tasks, steering, collisions, building, factories, reclaiming)
   - `map/`: renderer-independent map data (features, placed features, heights); world units are TA pixels from the map's top-left
   - `graphics/`: renderer-side code (textures, model geometry, Three.js model builder, terrain, feature sprites, RTS camera, posing models from sim piece state, drawing sim units)
   - `io/`: byte sources for Node, browser files and the dev server

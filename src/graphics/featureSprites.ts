@@ -19,6 +19,8 @@ export interface FeatureSprites {
   group: THREE.Group;
   /** Features whose sprite could not be found. */
   missing: string[];
+  /** Hides a feature (e.g. once reclaimed) or shows it again. */
+  setVisible(feature: PlacedFeature, visible: boolean): void;
   dispose(): void;
 }
 
@@ -89,8 +91,11 @@ export async function createFeatureSprites(vfs: Vfs, palette: Palette, features:
   tex.minFilter = THREE.NearestFilter;
   tex.needsUpdate = true;
 
+  // Where each feature's quads sit in each geometry, so they can be hidden later.
+  const ranges = new Map<PlacedFeature, { geo: THREE.BufferGeometry; start: number; positions: number[] }[]>();
   const build = (items: Placed[]) => {
     const pos: number[] = [];
+    const starts: [PlacedFeature, number, number][] = [];
     const uv: number[] = [];
     for (const { frame, feature } of items) {
       const s = slots.get(frame)!;
@@ -111,12 +116,17 @@ export async function createFeatureSprites(vfs: Vfs, palette: Palette, features:
       const tr = corner(frame.width, 0);
       const bl = corner(0, frame.height);
       const br = corner(frame.width, frame.height);
+      starts.push([feature, pos.length, 18]);
       pos.push(...tl, ...bl, ...tr, ...tr, ...bl, ...br);
       uv.push(u0, v0, u0, v1, u1, v0, u1, v0, u0, v1, u1, v1);
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    for (const [f, start] of starts) {
+      if (!ranges.has(f)) ranges.set(f, []);
+      ranges.get(f)!.push({ geo: g, start, positions: pos.slice(start, start + 18) });
+    }
     return g;
   };
 
@@ -141,6 +151,15 @@ export async function createFeatureSprites(vfs: Vfs, palette: Palette, features:
   return {
     group,
     missing: [...missing],
+    setVisible(feature, visible) {
+      for (const r of ranges.get(feature) ?? []) {
+        const attr = r.geo.getAttribute('position') as THREE.BufferAttribute;
+        const arr = attr.array as Float32Array;
+        if (visible) arr.set(r.positions, r.start);
+        else arr.fill(0, r.start, r.start + 18);
+        attr.needsUpdate = true;
+      }
+    },
     dispose() {
       spriteGeo.dispose();
       shadowGeo.dispose();

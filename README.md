@@ -9,4 +9,4 @@ npm test
 npm run ta -- fbi ARMCOM   # print a unit's definition as JSON
 ```
 
-With the dev server running, http://localhost:5173/archives.html browses every file in your archives http://localhost:5173/models.html shows any unit in 3D, http://localhost:5173/maps.html lets you fly over any map, and http://localhost:5173/game.html lets you select and move an army around one.
+With the dev server running, http://localhost:5173/archives.html browses every file in your archives http://localhost:5173/models.html shows any unit in 3D, http://localhost:5173/maps.html lets you fly over any map, and http://localhost:5173/game.html lets you start with a Commander and build a base and an army.

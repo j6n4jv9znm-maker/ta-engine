@@ -11,6 +11,9 @@ import { createUnitModel, type UnitModel } from './threeModel';
  * between the last two ticks for smooth motion), headings and piece poses onto Three.js objects.
  * One template model is built per unit type and team colour; each unit gets a clone that shares its
  * geometry and materials but has its own pieces to pose.
+ *
+ * Units still being built are drawn as a green wireframe (TA's nano-lathe look), and every builder at
+ * work gets a green spray line from its nano piece (the simulation asks its QueryNanoPiece script) to the job.
  */
 
 interface Drawn {
@@ -18,7 +21,11 @@ interface Drawn {
   holder: THREE.Group;
   model: UnitModel;
   ring: THREE.Mesh;
+  /** Whether the model currently wears the under-construction material. */
+  nano: boolean;
 }
+
+const MAX_SPRAYS = 256;
 
 export class UnitRenderer {
   readonly group = new THREE.Group();
@@ -26,6 +33,11 @@ export class UnitRenderer {
   private readonly drawn = new Map<number, Drawn>();
   private readonly ringGeo = new THREE.RingGeometry(0.85, 1, 32).rotateX(-Math.PI / 2);
   private readonly ringMat = new THREE.MeshBasicMaterial({ color: 0x55ff55, depthTest: false, transparent: true, opacity: 0.9 });
+  private readonly nanoMat = new THREE.MeshBasicMaterial({ color: 0x66ff66, wireframe: true, transparent: true, opacity: 0.55 });
+  private readonly sprayPositions = new Float32Array(MAX_SPRAYS * 6);
+  private readonly sprayGeo = new THREE.BufferGeometry();
+  private readonly sprayMat = new THREE.LineBasicMaterial({ color: 0x77ff77, transparent: true, opacity: 0.8 });
+  private readonly sprays: THREE.LineSegments;
 
   constructor(
     private readonly lib: TextureLibrary,
@@ -34,6 +46,10 @@ export class UnitRenderer {
     private readonly teamOf: (owner: number) => number,
   ) {
     this.group.name = 'units';
+    this.sprayGeo.setAttribute('position', new THREE.BufferAttribute(this.sprayPositions, 3));
+    this.sprays = new THREE.LineSegments(this.sprayGeo, this.sprayMat);
+    this.sprays.frustumCulled = false;
+    this.group.add(this.sprays);
   }
 
   /** Syncs drawn units with the world. `alpha` (0-1) is how far we are between the last tick and the next. */
@@ -59,9 +75,51 @@ export class UnitRenderer {
       d.holder.position.set(x, y, z);
       d.holder.rotation.y = angleToRadians(lerpAngle(u.prevRotation, u.rotation, alpha));
       if (u.scripts) applyPose(d.model, u.scripts.pieces);
+      const building = !world.isFinished(u);
+      if (building !== d.nano) this.setNano(d, building);
       d.ring.visible = selected.has(u.id);
       if (d.ring.visible) d.ring.position.set(x, y + 1, z);
     }
+    this.updateSprays(world);
+  }
+
+  private setNano(d: Drawn, on: boolean): void {
+    d.nano = on;
+    d.model.root.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      if (on) {
+        o.userData.material ??= o.material;
+        o.material = this.nanoMat;
+      } else if (o.userData.material) {
+        o.material = o.userData.material as THREE.Material | THREE.Material[];
+      }
+    });
+  }
+
+  /** Green spray lines from each working builder's nano piece to what it is working on. */
+  private updateSprays(world: World): void {
+    let n = 0;
+    const from = new THREE.Vector3();
+    for (const u of world.units.values()) {
+      if (!u.nanoTarget || n >= MAX_SPRAYS) continue;
+      const d = this.drawn.get(u.id);
+      if (!d) continue;
+      const piece = u.nanoPiece ? d.model.pieces.get(u.nanoPiece.toLowerCase()) : undefined;
+      if (piece) {
+        d.holder.updateWorldMatrix(true, true);
+        piece.getWorldPosition(from);
+      } else {
+        from.set(u.x, u.y + 16, u.z);
+      }
+      // A little jitter at the far end makes the spray shimmer.
+      const t = u.nanoTarget;
+      const j = () => (Math.random() - 0.5) * 10;
+      this.sprayPositions.set([from.x, from.y, from.z, t.x + j(), t.y + j() * 0.5, t.z + j()], n * 6);
+      n++;
+    }
+    this.sprayGeo.setDrawRange(0, n * 2);
+    (this.sprayGeo.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    this.sprays.visible = n > 0;
   }
 
   private create(u: SimUnit): Drawn | undefined {
@@ -81,7 +139,7 @@ export class UnitRenderer {
     const model = cloneModel(template);
     const holder = new THREE.Group();
     holder.add(model.root);
-    return { holder, model, ring };
+    return { holder, model, ring, nano: false };
   }
 
   dispose(): void {
@@ -91,6 +149,9 @@ export class UnitRenderer {
     this.group.clear();
     this.ringGeo.dispose();
     this.ringMat.dispose();
+    this.nanoMat.dispose();
+    this.sprayGeo.dispose();
+    this.sprayMat.dispose();
   }
 }
 
