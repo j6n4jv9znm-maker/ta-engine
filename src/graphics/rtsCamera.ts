@@ -14,6 +14,13 @@ export interface RtsCameraOptions {
   heightAt?: (x: number, z: number) => number;
 }
 
+export interface RtsCameraControls {
+  /** Pan with W/A/S/D as well as the arrow keys (off when those letters are game commands). */
+  wasd?: boolean;
+  /** Mouse buttons that drag the view (1 middle, 2 right). */
+  dragButtons?: number[];
+}
+
 const PITCH = THREE.MathUtils.degToRad(58); // down from horizontal; close to TA's look
 const MIN_DIST = 150;
 const MAX_DIST = 4000;
@@ -32,10 +39,16 @@ export class RtsCamera {
   private drag: { x: number; y: number } | undefined;
   private readonly cleanups: (() => void)[] = [];
 
+  private readonly wasd: boolean;
+  private readonly dragButtons: number[];
+
   constructor(
     private readonly el: HTMLElement,
     private opts: RtsCameraOptions,
+    controls: RtsCameraControls = {},
   ) {
+    this.wasd = controls.wasd ?? true;
+    this.dragButtons = controls.dragButtons ?? [1, 2];
     this.camera = new THREE.PerspectiveCamera(35, 1, 10, 30000);
     this.target.set(opts.mapWidth / 2, 0, opts.mapHeight / 2);
 
@@ -46,7 +59,7 @@ export class RtsCamera {
     on(window, 'keydown', (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       this.keys.add(e.key.toLowerCase());
-      if (e.key.toLowerCase() === 'r') this.yaw = 0;
+      if (e.key.toLowerCase() === 'r' && this.wasd) this.yaw = 0;
     });
     on(window, 'keyup', (e: KeyboardEvent) => this.keys.delete(e.key.toLowerCase()));
     on(window, 'blur', () => this.keys.clear());
@@ -61,7 +74,7 @@ export class RtsCamera {
     });
     on(el, 'mouseleave', () => (this.mouse = undefined));
     on(el, 'mousedown', (e: MouseEvent) => {
-      if (e.button === 1 || e.button === 2) {
+      if (this.dragButtons.includes(e.button)) {
         this.drag = { x: e.clientX, y: e.clientY };
         e.preventDefault();
       }
@@ -104,10 +117,11 @@ export class RtsCamera {
     const speed = this.distance * 1.2 * dt;
     let dx = 0;
     let dz = 0;
-    if (this.keys.has('a') || this.keys.has('arrowleft')) dx -= 1;
-    if (this.keys.has('d') || this.keys.has('arrowright')) dx += 1;
-    if (this.keys.has('w') || this.keys.has('arrowup')) dz -= 1;
-    if (this.keys.has('s') || this.keys.has('arrowdown')) dz += 1;
+    const k = (letter: string, arrow: string) => this.keys.has(arrow) || (this.wasd && this.keys.has(letter));
+    if (k('a', 'arrowleft')) dx -= 1;
+    if (k('d', 'arrowright')) dx += 1;
+    if (k('w', 'arrowup')) dz -= 1;
+    if (k('s', 'arrowdown')) dz += 1;
     if (this.edgeScroll && this.mouse && !this.drag) {
       const { clientWidth: w, clientHeight: h } = this.el;
       if (this.mouse.x < EDGE) dx -= 1;
