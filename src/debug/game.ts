@@ -95,6 +95,7 @@ let speed = 1;
 type Mode = { kind: 'select' } | { kind: 'place'; unitName: string } | { kind: 'reclaim' };
 let mode: Mode = { kind: 'select' };
 let menuPage = 0;
+let menuBuilderId = -1;
 
 // --- Scene ------------------------------------------------------------------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -129,35 +130,51 @@ scene.add(ghost);
 const TICK_MS = 1000 / TICKS_PER_SECOND;
 let last = performance.now();
 let acc = 0;
-renderer.setAnimationLoop((t) => {
-  const dt = Math.min(250, t - last);
+/** Time spent in each part of the last frame, in ms (for spotting slow frames from the console). */
+const frameTimes: Record<string, number> = {};
+function timed(name: string, fn: () => void): void {
+  const a = performance.now();
+  fn();
+  frameTimes[name] = performance.now() - a;
+}
+
+function frame(t: number): void {
+  const dt = Math.max(0, Math.min(250, t - last));
   last = t;
   rts.update(dt / 1000);
-  if (game && !paused) {
-    acc += dt * speed;
-    let steps = 0;
-    while (acc >= TICK_MS && steps++ < 20) {
-      acc -= TICK_MS;
-      game.world.tick();
+  timed('sim', () => {
+    if (game && !paused) {
+      acc += dt * speed;
+      let steps = 0;
+      while (acc >= TICK_MS && steps++ < 20) {
+        acc -= TICK_MS;
+        game.world.tick();
+      }
+      if (steps >= 20) acc = 0;
     }
-    if (steps >= 20) acc = 0;
-  }
+  });
   if (game) {
-    for (const id of selected) if (!game.world.units.has(id) || game.world.units.get(id)!.dying) selected.delete(id);
+    const g = game;
+    for (const id of selected) if (!g.world.units.has(id) || g.world.units.get(id)!.dying) selected.delete(id);
     const alpha = paused ? 1 : acc / TICK_MS;
-    game.units.update(game.world, alpha, selected);
-    game.combat.update(game.world, alpha, dt / 1000, game.units, ME);
-    syncFeatures(game);
-    syncFog(game);
-    const secs = Math.floor(game.world.tickCount / TICKS_PER_SECOND);
-    clockEl.textContent = `Game time ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} · wind ${game.world.windSpeed}`;
-    drawResources(game.world);
-    refreshPanelSoon();
+    timed('units', () => g.units.update(g.world, alpha, selected));
+    timed('combat', () => g.combat.update(g.world, alpha, dt / 1000, g.units, ME));
+    timed('features', () => {
+      syncFeatures(g);
+      syncFog(g);
+    });
+    const secs = Math.floor(g.world.tickCount / TICKS_PER_SECOND);
+    clockEl.textContent = `Game time ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} · wind ${g.world.windSpeed}`;
+    timed('panel', () => {
+      drawResources(g.world);
+      refreshPanelSoon();
+    });
   }
-  renderer.render(scene, rts.camera);
-  drawMinimap();
-  drawOverlay();
-});
+  timed('render', () => renderer.render(scene, rts.camera));
+  timed('minimap', drawMinimap);
+  timed('overlay', drawOverlay);
+}
+renderer.setAnimationLoop(frame);
 
 // --- Loading -------------------------------------------------------------------
 async function load(open: () => Promise<Vfs | undefined>, none: string): Promise<void> {
@@ -230,7 +247,7 @@ async function startGame(mapName: string): Promise<void> {
   group.add(terrain.mesh, sprites.group, featureGroup, units.group, combat.group);
   scene.add(group);
   game = { map, world, terrain, sprites, featureModels, featureObjects, hiddenFeatures: new Set(), extraFeatures: new Map(), units, combat, fogVersion: -1, group };
-  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts };
+  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt };
   selected.clear();
   setMode({ kind: 'select' });
   acc = 0;
@@ -377,7 +394,10 @@ function drawOverlay(): void {
     g.fillStyle = lost ? '#ff7070' : '#8f8';
     g.font = 'bold 28px ui-monospace, Menlo, monospace';
     g.textAlign = 'center';
-    g.fillText(lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2 + 10);
+    g.fillText(lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2);
+    g.font = '14px ui-monospace, Menlo, monospace';
+    g.fillStyle = '#ddd';
+    g.fillText('Press Restart (top left) to play again.', w / 2, h / 2 + 26);
   }
 }
 
@@ -473,7 +493,7 @@ window.addEventListener('mouseup', (e) => {
     const hit = groundAt(p);
     if (builder && hit) {
       const site = game.world.buildSite(mode.unitName, hit.x, hit.z);
-      if (site.ok) game.world.issue({ kind: 'build', unitId: builder.id, unitName: mode.unitName, x: site.x, z: site.z, queue: e.shiftKey });
+      if (site.ok && !overlapsQueued(mode.unitName, site)) game.world.issue({ kind: 'build', unitId: builder.id, unitName: mode.unitName, x: site.x, z: site.z, queue: e.shiftKey });
     }
     if (!e.shiftKey) setMode({ kind: 'select' });
     return;
@@ -571,6 +591,25 @@ function setMode(m: Mode): void {
   refreshPanel();
 }
 
+/** Whether a building placed at `site` would overlap one already queued (not yet started) by our builders. */
+function overlapsQueued(unitName: string, site: { x: number; z: number }): boolean {
+  if (!game) return false;
+  const def = assets.get(unitName.toLowerCase())?.def;
+  if (!def) return false;
+  for (const u of game.world.units.values()) {
+    if (u.owner !== ME) continue;
+    for (const t of u.tasks) {
+      if (t.kind !== 'build' || t.targetId !== undefined) continue;
+      const other = assets.get(t.unitName.toLowerCase())?.def;
+      if (!other) continue;
+      const gapX = Math.abs(t.x - site.x) * 2 - (def.footprintX + other.footprintX) * 16;
+      const gapZ = Math.abs(t.z - site.z) * 2 - (def.footprintZ + other.footprintZ) * 16;
+      if (gapX < 0 && gapZ < 0) return true;
+    }
+  }
+  return false;
+}
+
 function updateGhost(p: { x: number; y: number }): void {
   if (mode.kind !== 'place' || !game) return;
   const hit = groundAt(p);
@@ -583,7 +622,7 @@ function updateGhost(p: { x: number; y: number }): void {
   const h = Math.max(16, def.footprintX * 4);
   ghost.scale.set(def.footprintX * 16, h, def.footprintZ * 16);
   ghost.position.set(site.x, game.world.terrain.heightAt(site.x, site.z) + h / 2, site.z);
-  (ghost.material as THREE.MeshBasicMaterial).color.set(site.ok ? 0x55ff55 : 0xff4444);
+  (ghost.material as THREE.MeshBasicMaterial).color.set(site.ok && !overlapsQueued(mode.unitName, site) ? 0x55ff55 : 0xff4444);
   ghost.visible = true;
 }
 
@@ -663,21 +702,34 @@ function refreshPanel(): void {
   buildEl.textContent = '';
   if (!builder) return;
   const pages = menus.get(builder.def.unitName.toLowerCase()) ?? [];
+  // A different builder starts on its first page.
+  if (builder.id !== menuBuilderId) {
+    menuBuilderId = builder.id;
+    menuPage = 0;
+  }
   menuPage = Math.min(menuPage, Math.max(0, pages.length - 1));
   const head = document.createElement('div');
-  head.className = 'row';
-  head.innerHTML = `<b>${esc(builder.def.name)}</b> <span class="dim">builds (page ${menuPage + 1}/${pages.length})</span>`;
+  head.innerHTML = `<b>${esc(builder.def.name)}</b> <span class="dim">can build:</span>`;
+  buildEl.append(head);
   if (pages.length > 1) {
-    addButton(head, '‹', () => {
+    // Page arrows on their own fixed row, so they don't jump around between clicks.
+    const nav = document.createElement('div');
+    nav.className = 'row';
+    addButton(nav, '‹ prev', () => {
       menuPage = (menuPage + pages.length - 1) % pages.length;
       refreshPanel();
     });
-    addButton(head, '›', () => {
+    const label = document.createElement('span');
+    label.className = 'dim';
+    label.textContent = `page ${menuPage + 1} of ${pages.length}`;
+    nav.append(label);
+    addButton(nav, 'next ›', () => {
       menuPage = (menuPage + 1) % pages.length;
       refreshPanel();
     });
+    buildEl.append(nav);
   }
-  buildEl.append(head);
+
   const grid = document.createElement('div');
   grid.id = 'buildGrid';
   for (const name of pages[menuPage] ?? []) {
@@ -685,8 +737,11 @@ function refreshPanel(): void {
     if (!def) continue;
     const b = document.createElement('button');
     const queued = builder.factory?.queue.filter((q) => q.unitName === name).reduce((s, q) => s + q.count, 0) ?? 0;
-    b.innerHTML = `${esc(def.name)}<small>${Math.round(def.buildCostMetal)} M · ${Math.round(def.buildCostEnergy)} E</small>${queued ? `<span class="count">${queued}</span>` : ''}`;
-    b.title = `${def.description}\nBuild time ${Math.round(def.buildTime)}`;
+    const notYet = !supported(def);
+    b.innerHTML = `${esc(def.name)}<small>${notYet ? 'not in the engine yet' : `${Math.round(def.buildCostMetal)} M · ${Math.round(def.buildCostEnergy)} E`}</small>${queued ? `<span class="count">${queued}</span>` : ''}`;
+    b.title = notYet ? 'Aircraft and ships come in a later phase.' : `${def.description}\nBuild time ${Math.round(def.buildTime)}`;
+    b.disabled = notYet;
+    if (notYet) b.style.opacity = '0.45';
     b.classList.toggle('on', mode.kind === 'place' && mode.unitName === name);
     if (builder.factory) {
       b.addEventListener('click', (e) => game?.world.issue({ kind: 'factory', unitId: builder.id, unitName: name, count: e.shiftKey ? 5 : 1 }));
@@ -700,6 +755,16 @@ function refreshPanel(): void {
     grid.append(b);
   }
   buildEl.append(grid);
+}
+
+/** Aircraft, ships and the factories that only make them aren't simulated yet. */
+function supported(def: import('../sim/unitDef').UnitDef): boolean {
+  if (def.canFly || def.movementClass.minWaterDepth > 0 || def.ownMovement.minWaterDepth > 0) return false;
+  if (def.builder && def.bmCode === 0) {
+    const products = (menus.get(def.unitName.toLowerCase()) ?? []).flat().map((n) => assets.get(n.toLowerCase())?.def);
+    if (products.length && products.every((p) => !p || p.canFly || p.movementClass.minWaterDepth > 0)) return false;
+  }
+  return true;
 }
 
 function describeTasks(u: SimUnit): string {
@@ -758,6 +823,9 @@ function prepareMinimap(map: GameMap): void {
   minimapEl.style.width = `${Math.min(width * 1.5, 260)}px`;
 }
 
+const fogCanvas = document.createElement('canvas');
+let fogVersion = -1;
+
 function drawMinimap(): void {
   if (!game || !minimapImage) return;
   const g = minimapEl.getContext('2d')!;
@@ -765,13 +833,18 @@ function drawMinimap(): void {
   const sx = minimapEl.width / game.map.widthUnits;
   const sz = minimapEl.height / game.map.heightUnits;
   const vis = game.world.visibility;
-  g.fillStyle = 'rgba(0,0,0,0.45)';
-  const grid = vis.grids[ME]!;
-  for (let tz = 0; tz < vis.height; tz++) {
-    for (let tx = 0; tx < vis.width; tx++) {
-      if (!(grid[tz * vis.width + tx]! & SEEN)) g.fillRect(tx * VIS_TILE * sx, tz * VIS_TILE * sz, VIS_TILE * sx + 0.5, VIS_TILE * sz + 0.5);
-    }
+  // The fog layer only changes when line of sight is refreshed; draw it once into its own canvas.
+  if (fogCanvas.width !== vis.width || fogCanvas.height !== vis.height || fogVersion !== vis.version) {
+    fogVersion = vis.version;
+    fogCanvas.width = vis.width;
+    fogCanvas.height = vis.height;
+    const img = new ImageData(vis.width, vis.height);
+    const grid = vis.grids[ME]!;
+    for (let i = 0; i < grid.length; i++) img.data[i * 4 + 3] = grid[i]! & SEEN ? 0 : 115;
+    fogCanvas.getContext('2d')!.putImageData(img, 0, 0);
   }
+  g.imageSmoothingEnabled = false;
+  g.drawImage(fogCanvas, 0, 0, vis.width * VIS_TILE * sx, vis.height * VIS_TILE * sz);
   for (const u of game.world.units.values()) {
     const seen = u.owner === ME || (vis.at(ME, u.x, u.z) & SEEN) !== 0;
     if (!seen && !(vis.at(ME, u.x, u.z) & RADAR)) continue;
