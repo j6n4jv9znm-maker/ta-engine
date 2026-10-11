@@ -138,6 +138,24 @@ describe('combat', () => {
     expect(alive(w, friend)).toBe(false);
   });
 
+  it('an attacker whose shots keep hitting a rock moves in for a clear shot', () => {
+    // A tall rock sits right between the tank and its target, which is otherwise in range.
+    const rock = testFeature({ name: 'rock', blocking: true, indestructible: true, reclaimable: false, height: 80, footprintX: 3, footprintZ: 3 });
+    const w = new World(flatGameMap(64, 64, [{ def: rock, cellX: 20, cellZ: 17, x: 344, y: 20, z: 296 }]), {
+      seed: 7,
+      assets: (n) => ALL.get(n.toLowerCase()),
+      weapons: WEAPONS,
+      featureDefs: FEATURES,
+    });
+    const tank = w.spawn(TANK, 0, 200, 296);
+    const target = w.spawn(DUMMY, 1, 470, 296);
+    w.issue({ kind: 'attack', unitIds: [tank.id], targetId: target.id });
+    run(w, 30 * 3);
+    expect(tank.blockedShots).toBeGreaterThan(0);
+    run(w, 30 * 30);
+    expect(alive(w, target)).toBe(false);
+  });
+
   it('is deterministic', () => {
     const play = () => {
       const w = newWorld();
