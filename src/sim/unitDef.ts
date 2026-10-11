@@ -76,6 +76,10 @@ export interface UnitDef {
   radarDistance: number;
   /** Damage multiplier while the unit is "armored" (closed up), e.g. 0.5. */
   damageModifier: number;
+  /** FBI category words, uppercased (e.g. ARM KBOT LEVEL1 WEAPON NOTAIR). */
+  categories: string[];
+  /** FBI tedclass (COMMANDER, CONSTR, PLANT, ENERGY, METAL, TANK, KBOT, ...). */
+  tedClass: string;
   /** The class used for pathfinding; units without one use their own footprint and limits. */
   movementClass: MovementClass;
   /** The unit's own limits, used for collision checks (TA ignores the movement class there, per RWE). */
@@ -162,6 +166,8 @@ export function parseUnitDef(fbi: TdfBlock, movementClasses: Map<string, Movemen
     sightDistance: n('sightdistance', 200),
     radarDistance: n('radardistance'),
     damageModifier: n('damagemodifier', 1),
+    categories: s('category').toUpperCase().split(/\s+/).filter(Boolean),
+    tedClass: s('tedclass').toUpperCase(),
     movementClass: movementClasses.get(mcName) ?? own,
     ownMovement: own,
   };

@@ -162,6 +162,8 @@ const WAYPOINT_RADIUS = 16;
 const FINAL_RADIUS = 8;
 const REPATH_INTERVAL = TICKS_PER_SECOND;
 const MAX_REPATHS = 10;
+/** How many units may re-plan a path in one tick (new orders always plan at once). */
+const REPLANS_PER_TICK = 20;
 /** Wind generators make full power at this wind speed (RWE MaxUtilizableWindSpeed). */
 const MAX_USEFUL_WIND = 5000;
 /** How long to wait for a build script to report its stance before working anyway. */
@@ -186,9 +188,13 @@ export class World {
   readonly visibility: Visibility;
   /** Players knocked out (their Commander died). */
   readonly defeated = new Set<number>();
+  /** Computer players; each gets a look at the world every tick and plays through commands. */
+  readonly ais: { update(world: World): void }[] = [];
   tickCount = 0;
   windSpeed = 0;
   private nextProjectileId = 1;
+  /** Re-plans allowed this tick; units over budget keep their old path a little longer. */
+  private replanBudget = 0;
   private orderCache: SimUnit[] | undefined;
   private nextWindChange = 0;
   private nextId = 1;
@@ -268,6 +274,16 @@ export class World {
       }
     }
     return undefined;
+  }
+
+  /** A unit type's definition, model and script. */
+  assetsOf(unitName: string): UnitAssets | undefined {
+    return this.assetsFor(unitName);
+  }
+
+  /** Whether the ring of `margin` cells around a footprint is free of buildings and blocking features. */
+  hasRoomAround(def: UnitDef, cx: number, cz: number, margin: number): boolean {
+    return !this.occupancy.staticBlocked(cx - margin, cz - margin, def.footprintX + margin * 2, def.footprintZ + margin * 2);
   }
 
   /** Whether a unit of this type could stand (or be built) with its footprint's top-left at (cx, cz). */
@@ -390,6 +406,8 @@ export class World {
     const cmds = this.queue;
     this.queue = [];
     for (const c of cmds) this.apply(c);
+    for (const ai of this.ais) ai.update(this);
+    this.replanBudget = REPLANS_PER_TICK;
 
     if (this.tickCount % TICKS_PER_SECOND === 0) this.updateEconomy();
     this.updateWind();
@@ -1072,7 +1090,10 @@ export class World {
       !u.path ||
       (u.inCollision && now - u.path.createdTick >= REPATH_INTERVAL) ||
       (u.path.index >= u.path.waypoints.length && !u.path.complete && now - u.path.createdTick >= REPATH_INTERVAL);
+    // Re-plans (not first plans) share a per-tick budget so a big jam can't stall the game.
+    if (needPath && u.path && this.replanBudget <= 0) return u.path.index < u.path.waypoints.length ? this.seek(u, ...u.path.waypoints[u.path.index]!, Math.hypot(u.path.waypoints[u.path.index]![0] - u.x, u.path.waypoints[u.path.index]![1] - u.z)) : [u.rotation, 0];
     if (needPath) {
+      if (u.path) this.replanBudget--;
       // Only count re-plans when the unit has barely moved since the last one. Waiting in line behind a
       // moving unit counts much less (two units can block each other forever, so it still counts a bit).
       const moved = Math.hypot(u.x - u.lastPlanX, u.z - u.lastPlanZ) > 2 * WAYPOINT_RADIUS;
@@ -1156,21 +1177,64 @@ export class World {
         }
       }
     }
-    const start = this.terrain.footprintCell(u.x, u.z, mc.footprintX, mc.footprintZ);
     const goal = this.terrain.footprintCell(tx, tz, mc.footprintX, mc.footprintZ);
     const clampCell = (c: [number, number]): [number, number] => [clamp(c[0], 0, w - 1), clamp(c[1], 0, this.terrain.height - 1)];
+    // If the unit stands on a cell the planner thinks is closed (inside a factory yard, or squeezed by
+    // others), start from the nearest open cell instead.
+    const start = nearestOpen(grid, w, this.terrain.height, clampCell(this.terrain.footprintCell(u.x, u.z, mc.footprintX, mc.footprintZ)));
     const result = findPath({
       width: w,
       height: this.terrain.height,
       passable: (x, z) => grid[z * w + x] === 1,
-      start: clampCell(start),
-      goal: clampCell(goal),
+      start,
+      // Aiming at something solid (a building, a unit's spot)? Aim at the open ground next to it, so the
+      // search can finish instead of exploring the whole map.
+      goal: nearestOpen(grid, w, this.terrain.height, clampCell(goal)),
     });
+    // Boxed in by parked units (a crowd at a rally point)? Then plan through them and let collisions sort it out.
+    if (avoidIdle && result.waypoints.length === 0 && !result.complete) return this.planPath(u, tx, tz, false);
     const waypoints = result.waypoints.map(([cx, cz]) => this.terrain.cellCenter(cx, cz, mc.footprintX, mc.footprintZ));
     // Finish on the exact spot that was clicked when we can reach it.
     if (result.complete && waypoints.length > 0) waypoints[waypoints.length - 1] = [tx, tz];
     if (result.complete && waypoints.length === 0) waypoints.push([tx, tz]);
     return { waypoints, index: 0, createdTick: this.tickCount, complete: result.complete };
+  }
+
+  /**
+   * Whether a ground unit of class `mc` could still drive from `from` to `to` if a building of type
+   * `def` stood with its top-left at (cx, cz) (plus `margin` cells around it). The AI uses this so it
+   * never walls its own army in.
+   */
+  pathSurvives(mc: MovementClass, from: { x: number; z: number }, to: { x: number; z: number }, def?: UnitDef, cx = 0, cz = 0, margin = 0): boolean {
+    const w = this.terrain.width;
+    const grid = this.pathGrid(mc).slice();
+    if (def) {
+      for (let z = cz - margin - mc.footprintZ + 1; z < cz + def.footprintZ + margin; z++) {
+        for (let x = cx - margin - mc.footprintX + 1; x < cx + def.footprintX + margin; x++) {
+          if (x >= 0 && z >= 0 && x < w && z < this.terrain.height) grid[z * w + x] = 0;
+        }
+      }
+    }
+    const cell = (p: { x: number; z: number }): [number, number] => {
+      const [x, z] = this.terrain.footprintCell(p.x, p.z, mc.footprintX, mc.footprintZ);
+      return [clamp(x, 0, w - 1), clamp(z, 0, this.terrain.height - 1)];
+    };
+    const start = cell(from);
+    // Start from the nearest open cell (the base itself may sit on a building).
+    let s = start;
+    for (let r = 0; r < 12 && !grid[s[1] * w + s[0]]; r++) {
+      for (let dz = -r; dz <= r && !grid[s[1] * w + s[0]]; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const x = start[0] + dx;
+          const z = start[1] + dz;
+          if (x >= 0 && z >= 0 && x < w && z < this.terrain.height && grid[z * w + x]) {
+            s = [x, z];
+            break;
+          }
+        }
+      }
+    }
+    return findPath({ width: w, height: this.terrain.height, passable: (x, z) => grid[z * w + x] === 1, start: s, goal: cell(to), maxExpansions: 200000 }).complete;
   }
 
   /** Walkable cells for a movement class, minus blocking features and solid building cells. */
@@ -1211,7 +1275,9 @@ export class World {
     if (cx !== u.cellX || cz !== u.cellZ) {
       if (this.occupancy.blocked(cx, cz, def.footprintX, def.footprintZ, u.id, u.exitFactory ?? 0)) {
         const other = this.occupancy.firstUnit(cx, cz, def.footprintX, def.footprintZ, u.id);
-        if (other !== 0 && this.units.get(other)?.order) u.blockedByMover = true;
+        const o = other !== 0 ? this.units.get(other) : undefined;
+        if (o?.order) u.blockedByMover = true;
+        else if (o) this.makeWay(o, u);
         return false;
       }
       if (!this.terrain.fits(def.movementClass, cx, cz)) return false;
@@ -1225,6 +1291,21 @@ export class World {
     u.z = z;
     u.y = this.groundY(def, x, z);
     return true;
+  }
+
+  /**
+   * A unit standing idle in someone's way steps aside (TA's "bugger off"): it drives a short way off the
+   * mover's line of travel. Only idle, finished, mobile units of the same player are nudged.
+   */
+  private makeWay(idle: SimUnit, mover: SimUnit): void {
+    if (idle.owner !== mover.owner || idle.tasks.length > 0 || idle.dying || !this.isFinished(idle) || !this.canWalk(idle)) return;
+    const [fx, fz] = toDirection(mover.rotation);
+    // Step sideways relative to the mover's heading, to whichever side the idle unit already leans.
+    const side = (idle.x - mover.x) * fz - (idle.z - mover.z) * fx >= 0 ? 1 : -1;
+    const dist = (Math.max(idle.def.footprintX, mover.def.footprintX) + 1) * 16;
+    const x = clamp(idle.x + fz * side * dist + fx * 16, 0, this.map.widthUnits);
+    const z = clamp(idle.z - fx * side * dist + fz * 16, 0, this.map.heightUnits);
+    idle.tasks.push({ kind: 'move', x, z });
   }
 
   private overlapsBuilding(u: SimUnit, buildingId: number): boolean {
@@ -1300,6 +1381,22 @@ function modelHeight(model: Piece | undefined): number {
   };
   walk(model, 0);
   return Math.max(4, top);
+}
+
+/** The open cell nearest `c` (searching outwards a few cells), or `c` itself if none is near. */
+function nearestOpen(grid: Uint8Array, w: number, h: number, c: [number, number]): [number, number] {
+  if (grid[c[1] * w + c[0]]) return c;
+  for (let r = 1; r <= 6; r++) {
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        const x = c[0] + dx;
+        const z = c[1] + dz;
+        if (x >= 0 && z >= 0 && x < w && z < h && grid[z * w + x]) return [x, z];
+      }
+    }
+  }
+  return c;
 }
 
 function toSigned(a: number): number {
