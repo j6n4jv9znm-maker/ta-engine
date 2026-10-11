@@ -108,7 +108,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
 sun.position.set(-1, 4, 1);
 scene.add(sun);
-const rts = new RtsCamera(renderer.domElement, { mapWidth: 1, mapHeight: 1 }, { wasd: false, dragButtons: [1] });
+const rts = new RtsCamera(renderer.domElement, { mapWidth: 1, mapHeight: 1 }, { wasd: false, dragButtons: [1], rotate: false });
 
 function resize(): void {
   renderer.setSize(view.clientWidth, view.clientHeight, false);
@@ -570,6 +570,17 @@ window.addEventListener('keydown', (e) => {
   if (!game) return;
   const k = e.key.toLowerCase();
   if (k === 's' && selected.size) game.world.issue({ kind: 'stop', unitIds: [...selected] });
+  if (e.key === ' ') {
+    // Space: look at the selected units, or at your Commander when nothing is selected.
+    e.preventDefault();
+    const mine = [...game.world.units.values()].filter((u) => u.owner === ME);
+    const group = mine.filter((u) => selected.has(u.id));
+    const look = group.length ? group : mine.filter((u) => u.def.commander);
+    if (look.length) rts.lookAt(look.reduce((a, u) => a + u.x, 0) / look.length, look.reduce((a, u) => a + u.z, 0) / look.length);
+  }
+  if (e.key === '=' || e.key === '+' || e.key === '-') {
+    rts.zoomAt(rts.distance * (e.key === '-' ? 1.25 : 0.8), canvas.clientWidth / 2, canvas.clientHeight / 2);
+  }
   if (k === 'a' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     for (const u of game.world.units.values()) if (mineFinished(u) && u.def.bmCode !== 0) selected.add(u.id);
