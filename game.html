@@ -44,6 +44,7 @@
       <label class="row">Start with <select id="startWith"><option value="commander">a Commander</option><option value="army">two armies</option></select></label>
       <label class="row">Opponent <select id="opponent"><option value="easy">computer, easy</option><option value="medium" selected>computer, medium</option><option value="hard">computer, hard</option><option value="none">nobody (sandbox)</option></select></label>
       <div class="row"><button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button></div>
+      <label class="row"><input id="edge" type="checkbox" /> Scroll when the pointer rests at the edge</label>
       <div id="clock" class="dim"></div>
       <div id="selInfo" class="dim">Nothing selected.</div>
       <div id="commands" class="row"></div>
@@ -54,7 +55,7 @@
         Builders: pick something to build, then left-click the ground (shift to queue more). Right-click or Esc cancels.<br />
         Factories: click a unit to queue it (shift: 5), right-click to remove. Right-click the ground sets the rally point.<br />
         S stops.<br />
-        Moving around: swipe with two fingers (or arrow keys, or rest the pointer at the view's edge, or middle-drag) to move; pinch or the mouse wheel zooms towards the pointer, and + / − zoom too. Click or drag on the minimap to jump there. Space jumps to your selected units, or to your Commander.
+        Moving around: swipe with two fingers (or arrow keys, or middle-drag) to move; pinch or the mouse wheel zooms towards the pointer, and + / − zoom too. Click or drag on the minimap to jump there. Space jumps to your selected units, or to your Commander.
       </div>
       <label class="row">or open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
     </aside>

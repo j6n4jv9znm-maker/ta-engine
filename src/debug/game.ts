@@ -916,6 +916,10 @@ mapSel.addEventListener('change', () => void startGame(mapSel.value));
 startWithSel.addEventListener('change', () => void startGame(mapSel.value));
 opponentSel.addEventListener('change', () => void startGame(mapSel.value));
 $('restart').addEventListener('click', () => void startGame(mapSel.value));
+$<HTMLInputElement>('edge').addEventListener('change', (e) => {
+  rts.edgeScroll = (e.target as HTMLInputElement).checked;
+  (e.target as HTMLInputElement).blur();
+});
 $('pause').addEventListener('click', () => {
   paused = !paused;
   $('pause').textContent = paused ? 'Resume' : 'Pause';

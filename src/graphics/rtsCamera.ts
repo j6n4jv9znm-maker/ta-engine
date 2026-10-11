@@ -12,7 +12,7 @@ export interface RtsCameraOptions {
   /** Map size in world units, to keep the view on the map. */
   mapWidth: number;
   mapHeight: number;
-  /** Ground height lookup, so the camera follows hills. */
+  /** Ground height lookup; the camera sits at the map's typical ground height (it doesn't bob over hills, as in TA). */
   heightAt?: (x: number, z: number) => number;
 }
 
@@ -37,7 +37,8 @@ export class RtsCamera {
   readonly target = new THREE.Vector3();
   distance = 900;
   yaw = 0;
-  edgeScroll = true;
+  /** Scroll when the pointer rests at the view's edge (off by default: on a laptop it moves the view by surprise). */
+  edgeScroll = false;
 
   private keys = new Set<string>();
   private mouse: { x: number; y: number } | undefined;
@@ -93,6 +94,7 @@ export class RtsCamera {
     on(el, 'gesturestart', (e: Gesture) => {
       e.preventDefault();
       this.gestureScale = 1;
+      this.inGesture = true;
     });
     on(el, 'gesturechange', (e: Gesture) => {
       e.preventDefault();
@@ -102,16 +104,20 @@ export class RtsCamera {
       this.zoomAt((this.distance * this.gestureScale) / Math.max(0.05, e.scale), px, py);
       this.gestureScale = e.scale;
     });
-    on(el, 'gestureend', (e: Gesture) => e.preventDefault());
+    on(el, 'gestureend', (e: Gesture) => {
+      e.preventDefault();
+      this.inGesture = false;
+    });
     on(el, 'wheel', (e: WheelEvent) => {
       e.preventDefault();
       // Mac trackpads send two-finger swipes as wheel events too. Pinch (which arrives with ctrlKey)
       // and real mouse wheels zoom; a two-finger swipe pans, so it doesn't fling the camera away.
-      // A trackpad gives itself away with sideways or fractional deltas; once one has been seen,
-      // treat the following wheel events as swipes too (a fast straight swipe can look like a wheel).
-      const now = performance.now();
-      if (e.deltaX !== 0 || !Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 40) this.trackpadAt = now;
-      const mouseWheel = e.deltaMode !== 0 || (now - this.trackpadAt > 1500 && Math.abs(e.deltaY) >= 40);
+      // A trackpad gives itself away with sideways, fractional or small deltas. Once one has been
+      // seen, every later plain wheel event is a swipe: a fast flick can look just like a mouse wheel
+      // and would otherwise zoom far out.
+      if (e.ctrlKey && this.inGesture) return; // Safari: already handled as a gesture
+      if (e.deltaX !== 0 || !Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 40) this.trackpad = true;
+      const mouseWheel = e.deltaMode !== 0 || (!this.trackpad && Math.abs(e.deltaY) >= 40);
       if (e.ctrlKey || mouseWheel) {
         const amount = e.ctrlKey ? e.deltaY * 0.01 : Math.sign(e.deltaY) * 0.15;
         const r = el.getBoundingClientRect();
@@ -122,11 +128,13 @@ export class RtsCamera {
     });
   }
 
-  private trackpadAt = -Infinity;
+  private trackpad = false;
+  private inGesture = false;
   private gestureScale = 1;
 
   setMap(opts: RtsCameraOptions): void {
     this.opts = opts;
+    this.target.y = typicalHeight(opts);
     this.lookAt(opts.mapWidth / 2, opts.mapHeight / 2);
   }
 
@@ -220,8 +228,6 @@ export class RtsCamera {
     if (this.rotate && this.keys.has('q')) this.yaw += dt * 1.5;
     if (this.rotate && this.keys.has('e')) this.yaw -= dt * 1.5;
 
-    const ground = this.opts.heightAt?.(this.target.x, this.target.z) ?? 0;
-    this.target.y += (ground - this.target.y) * Math.min(1, dt * 6);
     this.place();
   }
 
@@ -233,4 +239,13 @@ export class RtsCamera {
     this.target.x = THREE.MathUtils.clamp(this.target.x, 0, this.opts.mapWidth);
     this.target.z = THREE.MathUtils.clamp(this.target.z, 0, this.opts.mapHeight);
   }
+}
+
+/** The median ground height over a grid of samples, so the view height stays fixed while panning. */
+function typicalHeight(opts: RtsCameraOptions): number {
+  if (!opts.heightAt) return 0;
+  const samples: number[] = [];
+  for (let i = 0.5; i < 16; i++) for (let j = 0.5; j < 16; j++) samples.push(opts.heightAt((opts.mapWidth * i) / 16, (opts.mapHeight * j) / 16));
+  samples.sort((a, b) => a - b);
+  return samples[samples.length >> 1] ?? 0;
 }
