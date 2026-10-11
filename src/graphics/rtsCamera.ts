@@ -3,7 +3,8 @@ import * as THREE from 'three';
 /*
  * RTS camera: looks at a point on the map from a fixed tilt, like TA's view from the south.
  * Pan with WASD/arrow keys, by pushing the mouse against the window edge, or by dragging with the
- * right/middle button. Zoom with the mouse wheel. Q/E rotate, R resets the rotation.
+ * right/middle button, or with a two-finger swipe on a trackpad. Zoom with the mouse wheel or by
+ * pinching. Q/E rotate, R resets the rotation.
  */
 
 export interface RtsCameraOptions {
@@ -83,7 +84,16 @@ export class RtsCamera {
     on(el, 'contextmenu', (e: MouseEvent) => e.preventDefault());
     on(el, 'wheel', (e: WheelEvent) => {
       e.preventDefault();
-      this.distance = THREE.MathUtils.clamp(this.distance * Math.exp(e.deltaY * 0.0015), MIN_DIST, MAX_DIST);
+      // Mac trackpads send two-finger swipes as wheel events too. Pinch (which arrives with ctrlKey)
+      // and real mouse wheels zoom; a two-finger swipe pans, so it doesn't fling the camera away.
+      const mouseWheel = e.deltaMode !== 0 || (e.deltaX === 0 && Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 40);
+      if (e.ctrlKey || mouseWheel) {
+        const amount = e.ctrlKey ? e.deltaY * 0.01 : Math.sign(e.deltaY) * 0.15;
+        this.distance = THREE.MathUtils.clamp(this.distance * Math.exp(amount), MIN_DIST, MAX_DIST);
+      } else {
+        const scale = this.distance / 700;
+        this.panScreen(e.deltaX * scale, e.deltaY * scale);
+      }
     });
   }
 
