@@ -186,6 +186,8 @@ export class World {
   readonly visibility: Visibility;
   /** Players knocked out (their Commander died). */
   readonly defeated = new Set<number>();
+  /** Computer players; each gets a look at the world every tick and plays through commands. */
+  readonly ais: { update(world: World): void }[] = [];
   tickCount = 0;
   windSpeed = 0;
   private nextProjectileId = 1;
@@ -268,6 +270,16 @@ export class World {
       }
     }
     return undefined;
+  }
+
+  /** A unit type's definition, model and script. */
+  assetsOf(unitName: string): UnitAssets | undefined {
+    return this.assetsFor(unitName);
+  }
+
+  /** Whether the ring of `margin` cells around a footprint is free of buildings and blocking features. */
+  hasRoomAround(def: UnitDef, cx: number, cz: number, margin: number): boolean {
+    return !this.occupancy.staticBlocked(cx - margin, cz - margin, def.footprintX + margin * 2, def.footprintZ + margin * 2);
   }
 
   /** Whether a unit of this type could stand (or be built) with its footprint's top-left at (cx, cz). */
@@ -390,6 +402,7 @@ export class World {
     const cmds = this.queue;
     this.queue = [];
     for (const c of cmds) this.apply(c);
+    for (const ai of this.ais) ai.update(this);
 
     if (this.tickCount % TICKS_PER_SECOND === 0) this.updateEconomy();
     this.updateWind();

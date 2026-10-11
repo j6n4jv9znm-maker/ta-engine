@@ -79,6 +79,8 @@ function unitDef(over: Partial<UnitDef> = {}): UnitAssets {
     sightDistance: 300,
     radarDistance: 0,
     damageModifier: 1,
+    categories: [],
+    tedClass: '',
     movementClass: tank,
     ownMovement: tank,
     ...over,
