@@ -41,7 +41,8 @@
       <h1>TA Sandbox <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
       <div id="status">Loading…</div>
       <label class="row">Map <select id="map"></select></label>
-      <label class="row">Start with <select id="startWith"><option value="commander">a Commander</option><option value="army">two armies (you against red)</option></select></label>
+      <label class="row">Start with <select id="startWith"><option value="commander">a Commander</option><option value="army">two armies</option></select></label>
+      <label class="row">Opponent <select id="opponent"><option value="easy">computer, easy</option><option value="medium" selected>computer, medium</option><option value="hard">computer, hard</option><option value="none">nobody (sandbox)</option></select></label>
       <div class="row"><button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button></div>
       <div id="clock" class="dim"></div>
       <div id="selInfo" class="dim">Nothing selected.</div>
@@ -63,7 +64,7 @@
         <div class="res energy"><span>Energy</span><div class="bar"><div class="fill" id="eFill"></div></div><span id="eText"></span></div>
       </div>
       <div id="box"></div>
-      <div id="hint">Sandbox: build, fight, win. No computer opponent yet: red only shoots back.</div>
+      <div id="hint">Skirmish: you (blue, Arm) against the computer (red, Core).</div>
     </main>
     <script type="module" src="/src/debug/game.ts"></script>
   </body>

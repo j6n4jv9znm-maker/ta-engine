@@ -19,6 +19,8 @@ import { UnitRenderer } from '../graphics/unitRenderer';
 import { loadFeatureDefinitions, type FeatureDef } from '../map/features';
 import { listMaps, loadGameMap, type GameMap } from '../map/mapData';
 import { UnitAssetLoader } from '../sim/assets';
+import { loadAiProfile, type AiPlan, type Difficulty } from '../sim/ai/aiProfile';
+import { SkirmishAi } from '../sim/ai/skirmishAi';
 import { loadBuildMenus, type BuildMenus } from '../sim/buildMenus';
 import { TICKS_PER_SECOND } from '../sim/pieces';
 import { loadUnitDefs } from '../sim/unitDef';
@@ -32,6 +34,7 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const statusEl = $('status');
 const mapSel = $<HTMLSelectElement>('map');
 const startWithSel = $<HTMLSelectElement>('startWith');
+const opponentSel = $<HTMLSelectElement>('opponent');
 const clockEl = $('clock');
 const selInfoEl = $('selInfo');
 const commandsEl = $('commands');
@@ -65,6 +68,7 @@ let lib: TextureLibrary | undefined;
 let featureDefs: Map<string, FeatureDef> | undefined;
 let menus: BuildMenus = new Map();
 let weapons = new Map<string, WeaponDef>();
+let aiPlans = new Map<Difficulty, AiPlan>();
 const assets = new Map<string, UnitAssets>();
 
 interface Game {
@@ -178,6 +182,7 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     }
     menus = await loadBuildMenus(v, new Set(defs.keys()));
     weapons = await loadWeaponDefs(v);
+    aiPlans = await loadAiProfile(v);
     mapSel.textContent = '';
     for (const name of listMaps(v)) {
       if (/example/i.test(name)) continue;
@@ -185,7 +190,9 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
       o.value = o.textContent = name;
       mapSel.append(o);
     }
-    mapSel.value = [...mapSel.options].some((o) => o.value === 'The Pass') ? 'The Pass' : (mapSel.options[0]?.value ?? '');
+    // Ashap Plateau is a classic open two-player map; good for a first game against the computer.
+    const preferred = ['Ashap Plateau', 'The Pass'].find((n) => [...mapSel.options].some((o) => o.value === n));
+    mapSel.value = preferred ?? mapSel.options[0]?.value ?? '';
     await startGame(mapSel.value);
   } catch (e) {
     statusEl.textContent = String(e);
@@ -208,6 +215,8 @@ async function startGame(mapName: string): Promise<void> {
     world.spawn(assets.get('corcom')!, 1, theirs.x, theirs.z, face(theirs.z));
     if (armies) spawnGroup(world, CORE_ARMY, 1, theirs.x, theirs.z + (theirs.z < map.heightUnits / 2 ? 120 : -120));
   }
+  const difficulty = opponentSel.value as Difficulty | 'none';
+  if (difficulty !== 'none') world.ais.push(new SkirmishAi(1, difficulty, menus, aiPlans.get(difficulty), 977));
 
   const terrain = createTerrain(map.tnt, palette);
   const sprites = await createFeatureSprites(vfs, palette, map.features);
@@ -816,6 +825,7 @@ minimapEl.addEventListener('contextmenu', (e) => e.preventDefault());
 // --- Controls ---------------------------------------------------------------------------
 mapSel.addEventListener('change', () => void startGame(mapSel.value));
 startWithSel.addEventListener('change', () => void startGame(mapSel.value));
+opponentSel.addEventListener('change', () => void startGame(mapSel.value));
 $('restart').addEventListener('click', () => void startGame(mapSel.value));
 $('pause').addEventListener('click', () => {
   paused = !paused;

@@ -1,7 +1,7 @@
 import type { BuildMenus } from '../buildMenus';
 import { TICKS_PER_SECOND } from '../pieces';
 import { Rng } from '../rng';
-import type { UnitDef } from '../unitDef';
+import type { MovementClass, UnitDef } from '../unitDef';
 import type { Command, SimUnit, World } from '../world';
 import { limitOf, profileKeys, weightOf, type AiPlan, type Difficulty } from './aiProfile';
 
@@ -49,6 +49,10 @@ export class SkirmishAi {
   /** Where the current wave is heading, and which units are in it. */
   private attack: { x: number; z: number; ids: Set<number> } | undefined;
   private base: { x: number; z: number } | undefined;
+  /** Where the other players started (the AI knows, as TA's does), for when it hasn't seen them yet. */
+  private enemyStarts: { x: number; z: number }[] = [];
+  /** The pickiest ground movement among the units it builds, used to keep a way out of the base open. */
+  private armyMovement: MovementClass | undefined;
   /** Building jobs handed out but not yet started, so two builders don't pick the same spot. */
   private claimed = new Map<number, { x: number; z: number; tick: number }>();
 
@@ -75,7 +79,14 @@ export class SkirmishAi {
     const mine = world.unitsInOrder().filter((u) => u.owner === this.player && !u.dying);
     const finished = mine.filter((u) => world.isFinished(u));
     const commander = finished.find((u) => u.def.commander);
-    this.base ??= commander ? { x: commander.x, z: commander.z } : undefined;
+    if (!this.base && commander) {
+      this.base = { x: commander.x, z: commander.z };
+      this.enemyStarts = world
+        .unitsInOrder()
+        .filter((u) => u.owner !== this.player && u.def.commander)
+        .map((u) => ({ x: u.x, z: u.z }));
+      this.armyMovement = this.pickiestMovement(world, commander, this.base, this.enemyStarts[0]);
+    }
     if (!this.base) return;
     for (const [id, c] of this.claimed) if (world.tickCount - c.tick > 60 * TICKS_PER_SECOND || !world.units.has(id)) this.claimed.delete(id);
 
@@ -107,7 +118,8 @@ export class SkirmishAi {
     // Metal extractors on free patches.
     const mex = pick((d) => d.extractsMetal > 0 && d.bmCode === 0 && d.ownMovement.minWaterDepth === 0);
     if (mex) {
-      const spot = this.freeMetalSpot(world, b, mex);
+      // The Commander only claims nearby metal; construction units range further.
+      const spot = this.freeMetalSpot(world, b, mex, b.def.commander ? 900 : 2500);
       if (spot) {
         this.issue(world, { kind: 'build', unitId: b.id, unitName: mex.unitName, x: spot.x, z: spot.z });
         this.claimed.set(b.id, { ...spot, tick: world.tickCount });
@@ -133,6 +145,17 @@ export class SkirmishAi {
       const gen = this.bestGenerator(world, options.filter((d) => this.allowed(d, mine)));
       if (gen && this.buildNear(world, b, gen)) return;
     }
+    // Clear wrecks near home for their metal (and so they don't clog the way out).
+    if (!b.def.commander) {
+      const wreck = world.features
+        .filter((f) => f.alive && f.def.reclaimable && f.def.metal > 0 && f.id >= world.map.features.length)
+        .filter((f) => Math.hypot(f.x - this.base!.x, f.z - this.base!.z) < BASE_RADIUS * 2)
+        .sort((a, c) => Math.hypot(a.x - b.x, a.z - b.z) - Math.hypot(c.x - b.x, c.z - b.z))[0];
+      if (wreck) {
+        this.issue(world, { kind: 'reclaim', unitIds: [b.id], featureId: wreck.id });
+        return;
+      }
+    }
     // Otherwise help a factory finish what it's making.
     const busy = factories.find((f) => f.factory?.currentId !== undefined);
     if (busy && !b.def.commander) this.issue(world, { kind: 'assist', unitIds: [b.id], targetId: busy.factory!.currentId! });
@@ -151,13 +174,13 @@ export class SkirmishAi {
       .sort((a, b) => score(b) - score(a) || a.unitName.localeCompare(b.unitName))[0];
   }
 
-  private freeMetalSpot(world: World, b: SimUnit, mex: UnitDef): { x: number; z: number } | undefined {
+  private freeMetalSpot(world: World, b: SimUnit, mex: UnitDef, maxDistance: number): { x: number; z: number } | undefined {
     const spots = world.features
       .filter((f) => f.alive && f.def.metal > 0 && !f.def.blocking && f.def.indestructible)
-      .map((f) => ({ x: f.x, z: f.z, d: Math.hypot(f.x - this.base!.x, f.z - this.base!.z) + Math.hypot(f.x - b.x, f.z - b.z) / 2 }))
+      .map((f) => ({ x: f.x, z: f.z, base: Math.hypot(f.x - this.base!.x, f.z - this.base!.z), d: Math.hypot(f.x - this.base!.x, f.z - this.base!.z) + Math.hypot(f.x - b.x, f.z - b.z) / 2 }))
       .sort((p, q) => p.d - q.d || p.x - q.x || p.z - q.z);
     for (const s of spots) {
-      if (s.d > 4000) break;
+      if (s.base > maxDistance) continue;
       if ([...this.claimed.values()].some((c) => Math.hypot(c.x - s.x, c.z - s.z) < 32)) continue;
       const site = world.buildSite(mex.unitName, s.x, s.z);
       if (site.ok) return { x: site.x, z: site.z };
@@ -165,20 +188,36 @@ export class SkirmishAi {
     return undefined;
   }
 
-  /** Orders a building on a free spot near the base, leaving room around it so units can get through. */
+  /**
+   * Orders a building on a free spot near the base, leaving room around it so units can get through.
+   * Tries rings of candidate spots outwards from the base (starting at a random angle so the base
+   * doesn't grow in one line), easing the margin if the base is cramped.
+   */
   private buildNear(world: World, b: SimUnit, d: UnitDef, margin = 2): boolean {
     const base = this.base!;
-    for (let attempt = 0; attempt < 12; attempt++) {
-      const angle = this.rng.int(0, 359) * (Math.PI / 180);
-      const dist = 80 + this.rng.int(0, BASE_RADIUS - 200);
-      const x = base.x + Math.sin(angle) * dist;
-      const z = base.z + Math.cos(angle) * dist;
-      const site = world.buildSite(d.unitName, x, z);
-      if (!site.ok || !world.hasRoomAround(d, site.cellX, site.cellZ, margin)) continue;
-      if ([...this.claimed.values()].some((c) => Math.hypot(c.x - site.x, c.z - site.z) < (d.footprintX + margin) * 16)) continue;
-      this.issue(world, { kind: 'build', unitId: b.id, unitName: d.unitName, x: site.x, z: site.z });
-      this.claimed.set(b.id, { x: site.x, z: site.z, tick: world.tickCount });
-      return true;
+    const start = this.rng.int(0, 359);
+    let pathChecks = 0;
+    for (const m of [margin, 1, 0]) {
+      for (let dist = 96; dist <= BASE_RADIUS; dist += 48) {
+        const steps = Math.max(8, Math.round((2 * Math.PI * dist) / 64));
+        for (let i = 0; i < steps; i++) {
+          const angle = ((start + (i * 360) / steps) * Math.PI) / 180;
+          const site = world.buildSite(d.unitName, base.x + Math.sin(angle) * dist, base.z + Math.cos(angle) * dist);
+          if (!site.ok || !world.hasRoomAround(d, site.cellX, site.cellZ, m)) continue;
+          if ([...this.claimed.values()].some((c) => Math.hypot(c.x - site.x, c.z - site.z) < (d.footprintX + m) * 16)) continue;
+          // Never wall the army in: there must still be a way from the base to the enemy.
+          const enemy = this.enemyStarts[0];
+          if (enemy && this.armyMovement) {
+            if (++pathChecks > 6) return false; // cramped base: try again next time rather than stall the game
+            if (!world.pathSurvives(this.armyMovement, base, enemy, d, site.cellX, site.cellZ, 1)) continue;
+          }
+          // Don't build on metal patches: they're for extractors.
+          if (d.extractsMetal === 0 && world.features.some((f) => f.alive && f.def.metal > 0 && !f.def.blocking && Math.hypot(f.x - site.x, f.z - site.z) < 48)) continue;
+          this.issue(world, { kind: 'build', unitId: b.id, unitName: d.unitName, x: site.x, z: site.z });
+          this.claimed.set(b.id, { x: site.x, z: site.z, tick: world.tickCount });
+          return true;
+        }
+      }
     }
     return false;
   }
@@ -223,34 +262,33 @@ export class SkirmishAi {
   }
 
   private attackWave(world: World, army: SimUnit[]): void {
-    // Keep an attack going: re-target units that have arrived or lost their target.
+    // Keep the current attack going: units that have arrived or lost their target pick the nearest
+    // enemy they can see, or head on to the next place enemies might be.
     if (this.attack) {
       const ids = [...this.attack.ids].filter((id) => world.units.has(id) && !world.units.get(id)!.dying);
       this.attack.ids = new Set(ids);
-      if (ids.length < 2) {
-        this.attack = undefined;
-      } else {
-        const units = ids.map((id) => world.units.get(id)!);
-        const seen = world.unitsInOrder().filter((e) => e.owner !== this.player && !e.dying && world.canSee(this.player, e));
-        for (const u of units) {
-          if (u.tasks.length > 0) continue;
-          const target = nearest(seen, u, 900);
-          if (target) this.issue(world, { kind: 'attack', unitIds: [u.id], targetId: target.id });
-          else {
-            const next = this.attackTarget(world, u);
-            if (next) this.issue(world, { kind: 'move', unitIds: [u.id], x: next.x, z: next.z });
-          }
+      if (ids.length === 0) this.attack = undefined;
+      const seen = world.unitsInOrder().filter((e) => e.owner !== this.player && !e.dying && world.canSee(this.player, e));
+      for (const id of ids) {
+        const u = world.units.get(id)!;
+        if (u.tasks.length > 0) continue;
+        const target = nearest(seen, u, 900);
+        if (target) this.issue(world, { kind: 'attack', unitIds: [u.id], targetId: target.id });
+        else {
+          const next = this.attackTarget(world, u);
+          if (next) this.issue(world, { kind: 'move', unitIds: [u.id], x: next.x, z: next.z });
         }
-        return;
       }
     }
-    const idle = army.filter((u) => u.tasks.length === 0);
+    // Launch the next wave once enough fighters are waiting at home; they join any attack in progress.
+    const idle = army.filter((u) => u.tasks.length === 0 && !this.attack?.ids.has(u.id));
     const size = Math.min(this.tuning.maxWave, this.tuning.firstWave + this.wave * this.tuning.waveGrowth);
     if (idle.length < size) return;
     const target = this.attackTarget(world, idle[0]!);
     if (!target) return;
     this.wave++;
-    this.attack = { ...target, ids: new Set(idle.map((u) => u.id)) };
+    if (!this.attack) this.attack = { ...target, ids: new Set() };
+    for (const u of idle) this.attack.ids.add(u.id);
     this.issue(world, { kind: 'move', unitIds: idle.map((u) => u.id), x: target.x, z: target.z });
   }
 
@@ -259,15 +297,38 @@ export class SkirmishAi {
     const seen = world.unitsInOrder().filter((e) => e.owner !== this.player && !e.dying && world.canSee(this.player, e));
     const building = nearest(seen.filter((e) => e.def.bmCode === 0), from) ?? nearest(seen, from);
     if (building) return { x: building.x, z: building.z };
+    // Head for where the enemy started; once that's been looked at and found empty, try the other
+    // start positions on the map.
     const starts = (world.map.ota?.schemas[0]?.startPositions ?? []).filter((p): p is { x: number; z: number } => !!p);
-    const others = starts.filter((p) => Math.hypot(p.x - this.base!.x, p.z - this.base!.z) > 300);
-    // Visit start positions we haven't looked at yet, nearest first.
-    const unexplored = others.filter((p) => !(world.visibility.at(this.player, p.x, p.z) & 4));
-    const list = unexplored.length ? unexplored : others;
-    return list.sort((a, b) => Math.hypot(a.x - from.x, a.z - from.z) - Math.hypot(b.x - from.x, b.z - from.z))[0];
+    const candidates = [...this.enemyStarts, ...starts.filter((p) => Math.hypot(p.x - this.base!.x, p.z - this.base!.z) > 300)];
+    const unseen = candidates.filter((p) => !(world.visibility.at(this.player, p.x, p.z) & 1));
+    return unseen[0] ?? candidates[0];
   }
 
   // --- helpers ---------------------------------------------------------------------------
+
+  /**
+   * The strictest movement class (lowest slope limit, then biggest footprint) among buildable fighters
+   * that can actually get from the base to the enemy on this map.
+   */
+  private pickiestMovement(world: World, commander: SimUnit, from: { x: number; z: number }, to: { x: number; z: number } | undefined): MovementClass {
+    const seen = new Set<string>();
+    const queue = [commander.def.unitName.toLowerCase()];
+    const classes: MovementClass[] = [commander.def.movementClass];
+    while (queue.length) {
+      const name = queue.shift()!;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      for (const n of (this.menus.get(name) ?? []).flat()) {
+        const d = world.assetsOf(n)?.def;
+        if (!d) continue;
+        if (isCombat(d)) classes.push(d.movementClass);
+        if (d.builder && seen.size < 12) queue.push(n.toLowerCase());
+      }
+    }
+    const sorted = classes.sort((a, b) => a.maxSlope - b.maxSlope || b.footprintX - a.footprintX || a.name.localeCompare(b.name));
+    return (to && sorted.find((mc) => world.pathSurvives(mc, from, to))) || commander.def.movementClass;
+  }
 
   private allowed(d: UnitDef, mine: SimUnit[]): boolean {
     const keys = profileKeys(d.unitName, d.tedClass, d.categories);

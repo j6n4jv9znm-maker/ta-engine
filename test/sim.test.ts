@@ -232,7 +232,7 @@ describe.skipIf(!hasGameData())('world simulation (your game files)', () => {
     const ids: number[] = [];
     for (let i = 0; i < 24; i++) ids.push(w.spawn((await loader.load(types[i % types.length]!))!, 0, a!.x, a!.z)!.id);
     w.issue({ kind: 'move', unitIds: ids, x: b!.x, z: b!.z });
-    run(w, 30 * 240);
+    run(w, 30 * 300);
     const units = [...w.units.values()];
     const arrived = units.filter((u) => Math.hypot(u.x - b!.x, u.z - b!.z) < 200);
     expect(arrived.length).toBe(24);

@@ -50,13 +50,23 @@ export function findPath(req: PathRequest): PathResult {
   const startI = idx(start[0], start[1]);
   const goalI = idx(goal[0], goal[1]);
 
-  const g = new Map<number, number>([[startI, 0]]);
-  const parent = new Map<number, number>();
-  const closed = new Set<number>();
-  const heap = new MinHeap();
+  // Scratch arrays are reused between searches (stamped with a search number instead of cleared), since
+  // a busy battlefield asks for many paths a second.
+  const n = width * height;
+  const sc = scratch(n);
+  const stamp = ++sc.search;
+  const gScore = sc.g;
+  const parent = sc.parent;
+  const seen = sc.seen; // == stamp: has a g score this search
+  const closed = sc.closed; // == stamp: expanded this search
+  const heap = sc.heap;
+  heap.clear();
   let seq = 0;
   const h0 = octile(start[0], start[1], goal[0], goal[1]);
-  heap.push({ f: h0, h: h0, seq: seq++, i: startI });
+  gScore[startI] = 0;
+  seen[startI] = stamp;
+  parent[startI] = -1;
+  heap.push(h0, h0, seq++, startI);
 
   let best = startI;
   let bestH = h0;
@@ -64,23 +74,24 @@ export function findPath(req: PathRequest): PathResult {
   let reached = false;
 
   while (heap.size > 0) {
-    const node = heap.pop()!;
-    if (closed.has(node.i)) continue;
-    closed.add(node.i);
-    if (node.h < bestH) {
-      best = node.i;
-      bestH = node.h;
+    const i = heap.popIndex();
+    if (closed[i] === stamp) continue;
+    closed[i] = stamp;
+    const x = i % width;
+    const z = (i - x) / width;
+    const hHere = octile(x, z, goal[0], goal[1]);
+    if (hHere < bestH) {
+      best = i;
+      bestH = hHere;
     }
-    if (node.i === goalI) {
+    if (i === goalI) {
       reached = true;
-      best = node.i;
+      best = i;
       break;
     }
     if (++expanded >= maxExpansions) break;
 
-    const x = node.i % width;
-    const z = (node.i - x) / width;
-    const gHere = g.get(node.i)!;
+    const gHere = gScore[i]!;
     for (const [dx, dz, cost] of DIRS) {
       const nx = x + dx;
       const nz = z + dz;
@@ -88,19 +99,19 @@ export function findPath(req: PathRequest): PathResult {
       if (!passable(nx, nz)) continue;
       if (dx !== 0 && dz !== 0 && (!passable(x + dx, z) || !passable(x, z + dz))) continue;
       const ni = idx(nx, nz);
-      if (closed.has(ni)) continue;
+      if (closed[ni] === stamp) continue;
       const ng = gHere + cost;
-      const old = g.get(ni);
-      if (old !== undefined && old <= ng) continue;
-      g.set(ni, ng);
-      parent.set(ni, node.i);
+      if (seen[ni] === stamp && gScore[ni]! <= ng) continue;
+      gScore[ni] = ng;
+      seen[ni] = stamp;
+      parent[ni] = i;
       const h = octile(nx, nz, goal[0], goal[1]);
-      heap.push({ f: ng + h, h, seq: seq++, i: ni });
+      heap.push(ng + h, h, seq++, ni);
     }
   }
 
   const cells: [number, number][] = [];
-  for (let i: number | undefined = best; i !== undefined && i !== startI; i = parent.get(i)) {
+  for (let i = best; i !== startI && i >= 0; i = parent[i]!) {
     cells.push([i % width, Math.floor(i / width)]);
   }
   cells.reverse();
@@ -126,54 +137,95 @@ function mergeStraightRuns(start: [number, number], cells: [number, number][]): 
   return out;
 }
 
-interface HeapNode {
-  f: number;
-  h: number;
-  seq: number;
-  i: number;
+/** Reusable search buffers per grid size. */
+interface Scratch {
+  search: number;
+  g: Int32Array;
+  parent: Int32Array;
+  seen: Uint32Array;
+  closed: Uint32Array;
+  heap: MinHeap;
+}
+const scratches = new Map<number, Scratch>();
+function scratch(n: number): Scratch {
+  let s = scratches.get(n);
+  if (!s) {
+    s = { search: 0, g: new Int32Array(n), parent: new Int32Array(n), seen: new Uint32Array(n), closed: new Uint32Array(n), heap: new MinHeap() };
+    scratches.set(n, s);
+  }
+  return s;
 }
 
-/** Binary min-heap ordered by f, then h, then insertion order (so ties break the same way every time). */
+/**
+ * Binary min-heap ordered by f, then h, then insertion order (so ties break the same way every time),
+ * stored in flat arrays to keep garbage down.
+ */
 class MinHeap {
-  private a: HeapNode[] = [];
-  get size(): number {
-    return this.a.length;
+  private f: number[] = [];
+  private h: number[] = [];
+  private seq: number[] = [];
+  private idx: number[] = [];
+  size = 0;
+
+  clear(): void {
+    this.size = 0;
   }
-  push(n: HeapNode): void {
-    const a = this.a;
-    a.push(n);
-    let i = a.length - 1;
-    while (i > 0) {
-      const p = (i - 1) >> 1;
-      if (!less(a[i]!, a[p]!)) break;
-      [a[i], a[p]] = [a[p]!, a[i]!];
-      i = p;
+
+  push(f: number, h: number, seq: number, i: number): void {
+    let k = this.size++;
+    this.f[k] = f;
+    this.h[k] = h;
+    this.seq[k] = seq;
+    this.idx[k] = i;
+    while (k > 0) {
+      const p = (k - 1) >> 1;
+      if (!this.less(k, p)) break;
+      this.swap(k, p);
+      k = p;
     }
   }
-  pop(): HeapNode | undefined {
-    const a = this.a;
-    const top = a[0];
-    const last = a.pop();
-    if (a.length > 0 && last) {
-      a[0] = last;
-      let i = 0;
+
+  popIndex(): number {
+    const top = this.idx[0]!;
+    const last = --this.size;
+    if (last > 0) {
+      this.f[0] = this.f[last]!;
+      this.h[0] = this.h[last]!;
+      this.seq[0] = this.seq[last]!;
+      this.idx[0] = this.idx[last]!;
+      let k = 0;
       for (;;) {
-        const l = i * 2 + 1;
+        const l = k * 2 + 1;
         const r = l + 1;
-        let m = i;
-        if (l < a.length && less(a[l]!, a[m]!)) m = l;
-        if (r < a.length && less(a[r]!, a[m]!)) m = r;
-        if (m === i) break;
-        [a[i], a[m]] = [a[m]!, a[i]!];
-        i = m;
+        let m = k;
+        if (l < this.size && this.less(l, m)) m = l;
+        if (r < this.size && this.less(r, m)) m = r;
+        if (m === k) break;
+        this.swap(k, m);
+        k = m;
       }
     }
     return top;
   }
-}
 
-function less(x: HeapNode, y: HeapNode): boolean {
-  if (x.f !== y.f) return x.f < y.f;
-  if (x.h !== y.h) return x.h < y.h;
-  return x.seq < y.seq;
+  private less(a: number, b: number): boolean {
+    if (this.f[a] !== this.f[b]) return this.f[a]! < this.f[b]!;
+    if (this.h[a] !== this.h[b]) return this.h[a]! < this.h[b]!;
+    return this.seq[a]! < this.seq[b]!;
+  }
+
+  private swap(a: number, b: number): void {
+    let t = this.f[a]!;
+    this.f[a] = this.f[b]!;
+    this.f[b] = t;
+    t = this.h[a]!;
+    this.h[a] = this.h[b]!;
+    this.h[b] = t;
+    t = this.seq[a]!;
+    this.seq[a] = this.seq[b]!;
+    this.seq[b] = t;
+    t = this.idx[a]!;
+    this.idx[a] = this.idx[b]!;
+    this.idx[b] = t;
+  }
 }

@@ -98,7 +98,8 @@ function updateWeapon(world: World, u: SimUnit, slot: WeaponSlot, index: WeaponI
     slot.target = undefined;
     slot.aim = undefined;
     target = undefined;
-    if (!w.commandFire) target = acquire(world, u, w.range);
+    // Look for a new target a few times a second, spread across units, rather than every tick.
+    if (!w.commandFire && (world.tickCount + u.id) % 6 === 0) target = acquire(world, u, w.range);
     if (!target) return;
     slot.target = target.id;
   }
