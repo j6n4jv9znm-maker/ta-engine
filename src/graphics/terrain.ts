@@ -20,8 +20,10 @@ const ATLAS_TILES_PER_ROW = 64;
 const vertexShader = /* glsl */ `
   attribute vec2 artPos;
   varying vec2 vArt;
+  varying vec2 vGround;
   void main() {
     vArt = artPos;
+    vGround = position.xz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -34,7 +36,10 @@ const fragmentShader = /* glsl */ `
   uniform sampler2D palette;     // 256x1 RGBA
   uniform vec2 mapTiles;         // tiles wide, tiles high
   uniform float atlasPerRow;
+  uniform sampler2D fog;         // R8 per fog tile: 1 = in sight, 0.5 = explored, lower = never seen
+  uniform vec2 fogSize;          // fog grid size in world units (0 = no fog)
   varying vec2 vArt;
+  varying vec2 vGround;
   void main() {
     // High ground near the top edge looks up art from above the map: there is none, so draw black.
     if (vArt.y < 0.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
@@ -47,12 +52,18 @@ const fragmentShader = /* glsl */ `
     ivec2 texel = ivec2((t - (t / perRow) * perRow) * ${TILE_SIZE}, (t / perRow) * ${TILE_SIZE}) + inTile;
     float idx = texelFetch(atlas, texel, 0).r * 255.0;
     gl_FragColor = texelFetch(palette, ivec2(int(idx + 0.5), 0), 0);
+    if (fogSize.x > 0.0) gl_FragColor.rgb *= texture2D(fog, vGround / fogSize).r;
     #include <colorspace_fragment>
   }
 `;
 
 export interface Terrain {
   mesh: THREE.Mesh;
+  /**
+   * Darkens what the player can't see: `brightness` holds one value (0-255) per fog tile of
+   * `tileSize` world units, row by row. Pass undefined to turn fog off.
+   */
+  setFog(brightness: Uint8Array | undefined, columns: number, rows: number, tileSize: number): void;
   dispose(): void;
 }
 
@@ -122,13 +133,34 @@ export function createTerrain(tnt: TntMap, palette: Palette): Terrain {
       palette: { value: paletteTex },
       mapTiles: { value: new THREE.Vector2(tnt.tilesWide, tnt.tilesHigh) },
       atlasPerRow: { value: ATLAS_TILES_PER_ROW },
+      fog: { value: null as THREE.DataTexture | null },
+      fogSize: { value: new THREE.Vector2(0, 0) },
     },
   });
+  let fogTex: THREE.DataTexture | undefined;
   const mesh = new THREE.Mesh(geo, material);
   mesh.name = 'terrain';
   return {
     mesh,
+    setFog(brightness, columns, rows, tileSize) {
+      if (!brightness) {
+        material.uniforms.fogSize!.value.set(0, 0);
+        return;
+      }
+      if (!fogTex || fogTex.image.width !== columns || fogTex.image.height !== rows) {
+        fogTex?.dispose();
+        fogTex = new THREE.DataTexture(new Uint8Array(columns * rows), columns, rows, THREE.RedFormat, THREE.UnsignedByteType);
+        fogTex.magFilter = THREE.LinearFilter;
+        fogTex.minFilter = THREE.LinearFilter;
+        fogTex.unpackAlignment = 1;
+        material.uniforms.fog!.value = fogTex;
+      }
+      (fogTex.image.data as Uint8Array).set(brightness);
+      fogTex.needsUpdate = true;
+      material.uniforms.fogSize!.value.set(columns * tileSize, rows * tileSize);
+    },
     dispose() {
+      fogTex?.dispose();
       geo.dispose();
       material.dispose();
       atlas.dispose();

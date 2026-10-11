@@ -23,6 +23,8 @@ interface Drawn {
   ring: THREE.Mesh;
   /** Whether the model currently wears the under-construction material. */
   nano: boolean;
+  /** Pieces blown off (drawn as debris instead). */
+  blown: Set<string>;
 }
 
 const MAX_SPRAYS = 256;
@@ -53,6 +55,20 @@ export class UnitRenderer {
   }
 
   /** Syncs drawn units with the world. `alpha` (0-1) is how far we are between the last tick and the next. */
+  /** The live mesh of one piece of a drawn unit (for blowing it off when the unit dies). */
+  pieceMesh(unitId: number, piece: string): THREE.Mesh | undefined {
+    const g = this.drawn.get(unitId)?.model.pieces.get(piece.toLowerCase());
+    return g?.children.find((c): c is THREE.Mesh => c instanceof THREE.Mesh && c.visible);
+  }
+
+  /** Stops drawing a piece on a unit (it flew off as debris). */
+  markBlown(unitId: number, piece: string): void {
+    this.drawn.get(unitId)?.blown.add(piece.toLowerCase());
+  }
+
+  /** Units of other players are only drawn while `viewer` can see them. */
+  viewer: number | undefined;
+
   update(world: World, alpha: number, selected: ReadonlySet<number>): void {
     for (const [id, d] of this.drawn) {
       if (!world.units.has(id)) {
@@ -69,12 +85,18 @@ export class UnitRenderer {
         this.drawn.set(u.id, d);
         this.group.add(d.holder, d.ring);
       }
+      const visible = this.viewer === undefined || u.owner === this.viewer || (world.visibility.at(this.viewer, u.x, u.z) & 1) !== 0;
+      d.holder.visible = visible;
+      if (!visible) {
+        d.ring.visible = false;
+        continue;
+      }
       const x = u.prevX + (u.x - u.prevX) * alpha;
       const y = u.prevY + (u.y - u.prevY) * alpha;
       const z = u.prevZ + (u.z - u.prevZ) * alpha;
       d.holder.position.set(x, y, z);
       d.holder.rotation.y = angleToRadians(lerpAngle(u.prevRotation, u.rotation, alpha));
-      if (u.scripts) applyPose(d.model, u.scripts.pieces);
+      if (u.scripts) applyPose(d.model, u.scripts.pieces, d.blown);
       const building = !world.isFinished(u);
       if (building !== d.nano) this.setNano(d, building);
       d.ring.visible = selected.has(u.id);
@@ -139,7 +161,7 @@ export class UnitRenderer {
     const model = cloneModel(template);
     const holder = new THREE.Group();
     holder.add(model.root);
-    return { holder, model, ring, nano: false };
+    return { holder, model, ring, nano: false, blown: new Set() };
   }
 
   dispose(): void {

@@ -1,6 +1,7 @@
 /*
- * Sandbox on a real map (Phases 5 and 6): select units, move them, and build a base and an army from a
- * Commander: build menus, placing buildings, factories, rally points, reclaiming, and the economy.
+ * Sandbox on a real map (Phases 5-7): select units, move them, build a base and an army from a
+ * Commander (build menus, placing buildings, factories, rally points, reclaiming, the economy), and
+ * fight: attack orders, auto-targeting, shots, explosions, wrecks, line of sight and fog of war.
  *
  * The simulation (src/sim/world.ts) runs at a fixed 30 Hz and only changes through commands. This page
  * turns mouse and keyboard input into commands and draws whatever the simulation says.
@@ -8,6 +9,7 @@
 import * as THREE from 'three';
 import { parse3do } from '../formats/3do';
 import { parsePalette, PALETTE_PATH, type Palette } from '../formats/palette';
+import { CombatRenderer } from '../graphics/combatRenderer';
 import { createFeatureSprites, type FeatureSprites } from '../graphics/featureSprites';
 import { RtsCamera } from '../graphics/rtsCamera';
 import { createTerrain, type Terrain } from '../graphics/terrain';
@@ -20,6 +22,8 @@ import { UnitAssetLoader } from '../sim/assets';
 import { loadBuildMenus, type BuildMenus } from '../sim/buildMenus';
 import { TICKS_PER_SECOND } from '../sim/pieces';
 import { loadUnitDefs } from '../sim/unitDef';
+import { EXPLORED, RADAR, SEEN, VIS_TILE } from '../sim/visibility';
+import { loadWeaponDefs, type WeaponDef } from '../sim/weaponDef';
 import { World, type SimFeature, type SimUnit, type UnitAssets } from '../sim/world';
 import type { Vfs } from '../vfs';
 import { openDevServerVfs, openPickedVfs } from './devData';
@@ -43,6 +47,15 @@ const ARMY: [string, number][] = [
   ['ARMFLASH', 4],
   ['ARMJETH', 3],
   ['ARMHAM', 3],
+  ['ARMROCK', 3],
+];
+const CORE_ARMY: [string, number][] = [
+  ['CORAK', 6],
+  ['CORRAID', 4],
+  ['CORGATOR', 4],
+  ['CORCRASH', 3],
+  ['CORTHUD', 3],
+  ['CORSTORM', 3],
 ];
 const TEAM_COLOURS = [0, 1]; // blue for you, red for the other side
 
@@ -51,6 +64,7 @@ let palette: Palette | undefined;
 let lib: TextureLibrary | undefined;
 let featureDefs: Map<string, FeatureDef> | undefined;
 let menus: BuildMenus = new Map();
+let weapons = new Map<string, WeaponDef>();
 const assets = new Map<string, UnitAssets>();
 
 interface Game {
@@ -61,7 +75,11 @@ interface Game {
   featureModels: UnitModel[];
   featureObjects: Map<number, THREE.Object3D>;
   hiddenFeatures: Set<number>;
+  /** Wrecks and heaps that appeared during the game, drawn on their own. */
+  extraFeatures: Map<number, { obj: THREE.Object3D; dispose?: () => void }>;
   units: UnitRenderer;
+  combat: CombatRenderer;
+  fogVersion: number;
   group: THREE.Group;
 }
 let game: Game | undefined;
@@ -121,9 +139,12 @@ renderer.setAnimationLoop((t) => {
     if (steps >= 20) acc = 0;
   }
   if (game) {
-    for (const id of selected) if (!game.world.units.has(id)) selected.delete(id);
-    game.units.update(game.world, paused ? 1 : acc / TICK_MS, selected);
+    for (const id of selected) if (!game.world.units.has(id) || game.world.units.get(id)!.dying) selected.delete(id);
+    const alpha = paused ? 1 : acc / TICK_MS;
+    game.units.update(game.world, alpha, selected);
+    game.combat.update(game.world, alpha, dt / 1000, game.units, ME);
     syncFeatures(game);
+    syncFog(game);
     const secs = Math.floor(game.world.tickCount / TICKS_PER_SECOND);
     clockEl.textContent = `Game time ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} · wind ${game.world.windSpeed}`;
     drawResources(game.world);
@@ -131,6 +152,7 @@ renderer.setAnimationLoop((t) => {
   }
   renderer.render(scene, rts.camera);
   drawMinimap();
+  drawOverlay();
 });
 
 // --- Loading -------------------------------------------------------------------
@@ -155,6 +177,7 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
       if (a) assets.set(name, a);
     }
     menus = await loadBuildMenus(v, new Set(defs.keys()));
+    weapons = await loadWeaponDefs(v);
     mapSel.textContent = '';
     for (const name of listMaps(v)) {
       if (/example/i.test(name)) continue;
@@ -173,25 +196,31 @@ async function startGame(mapName: string): Promise<void> {
   if (!vfs || !palette || !lib || !featureDefs) return;
   statusEl.textContent = `Loading ${mapName}…`;
   const map = await loadGameMap(vfs, mapName, featureDefs);
-  const world = new World(map, { seed: 20261011, assets: (n) => assets.get(n.toLowerCase()) });
+  const world = new World(map, { seed: 20261011, assets: (n) => assets.get(n.toLowerCase()), weapons, featureDefs });
   const starts = map.ota?.schemas[0]?.startPositions.filter((p): p is { x: number; z: number } => !!p) ?? [];
   const mine = starts[0] ?? { x: map.widthUnits / 2, z: map.heightUnits / 2 };
   const theirs = starts[1];
   const face = (z: number) => (z < map.heightUnits / 2 ? 0 : 32768);
   world.spawn(assets.get('armcom')!, ME, mine.x, mine.z, face(mine.z));
-  if (startWithSel.value === 'army') spawnGroup(world, ARMY, ME, mine.x, mine.z + 120);
-  if (theirs) world.spawn(assets.get('corcom')!, 1, theirs.x, theirs.z, face(theirs.z));
+  const armies = startWithSel.value === 'army';
+  if (armies) spawnGroup(world, ARMY, ME, mine.x, mine.z + (mine.z < map.heightUnits / 2 ? 120 : -120));
+  if (theirs) {
+    world.spawn(assets.get('corcom')!, 1, theirs.x, theirs.z, face(theirs.z));
+    if (armies) spawnGroup(world, CORE_ARMY, 1, theirs.x, theirs.z + (theirs.z < map.heightUnits / 2 ? 120 : -120));
+  }
 
   const terrain = createTerrain(map.tnt, palette);
   const sprites = await createFeatureSprites(vfs, palette, map.features);
   const { group: featureGroup, models: featureModels, objects: featureObjects } = await createFeatureModels(map);
   const units = new UnitRenderer(lib, palette, (u) => assets.get(u.def.unitName.toLowerCase()), (owner) => TEAM_COLOURS[owner] ?? owner);
+  units.viewer = ME;
+  const combat = new CombatRenderer(vfs, palette);
 
   stopGame();
   const group = new THREE.Group();
-  group.add(terrain.mesh, sprites.group, featureGroup, units.group);
+  group.add(terrain.mesh, sprites.group, featureGroup, units.group, combat.group);
   scene.add(group);
-  game = { map, world, terrain, sprites, featureModels, featureObjects, hiddenFeatures: new Set(), units, group };
+  game = { map, world, terrain, sprites, featureModels, featureObjects, hiddenFeatures: new Set(), extraFeatures: new Map(), units, combat, fogVersion: -1, group };
   (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts };
   selected.clear();
   setMode({ kind: 'select' });
@@ -221,7 +250,9 @@ function stopGame(): void {
   game.terrain.dispose();
   game.sprites.dispose();
   game.featureModels.forEach((m) => m.dispose());
+  game.extraFeatures.forEach((f) => f.dispose?.());
   game.units.dispose();
+  game.combat.dispose();
   game = undefined;
 }
 
@@ -249,14 +280,95 @@ async function createFeatureModels(map: GameMap): Promise<{ group: THREE.Group; 
   return { group, models: [...byObject.values()].filter((m): m is UnitModel => m !== null), objects };
 }
 
-/** Hides features the simulation has removed (reclaimed). */
+/** Hides features the simulation has removed (reclaimed) and draws new ones (wrecks, heaps). */
 function syncFeatures(g: Game): void {
   for (const f of g.world.features) {
+    if (f.id >= g.map.features.length && f.alive && !g.extraFeatures.has(f.id)) addExtraFeature(g, f);
     if (f.alive || g.hiddenFeatures.has(f.id)) continue;
     g.hiddenFeatures.add(f.id);
-    g.sprites.setVisible(g.map.features[f.id]!, false);
-    const obj = g.featureObjects.get(f.id);
+    const placed = g.map.features[f.id];
+    if (placed) g.sprites.setVisible(placed, false);
+    const obj = g.featureObjects.get(f.id) ?? g.extraFeatures.get(f.id)?.obj;
     if (obj) obj.visible = false;
+  }
+}
+
+const wreckModels = new Map<string, Promise<UnitModel | undefined>>();
+function addExtraFeature(g: Game, f: SimFeature): void {
+  const holder = new THREE.Group();
+  g.extraFeatures.set(f.id, { obj: holder });
+  g.group.add(holder);
+  if (f.def.object) {
+    const key = f.def.object.toLowerCase();
+    if (!wreckModels.has(key)) {
+      const path = `objects3d/${f.def.object}.3do`;
+      wreckModels.set(key, vfs!.exists(path) ? vfs!.read(path).then((b) => createUnitModel(parse3do(b), lib!, palette!)) : Promise.resolve(undefined));
+    }
+    void wreckModels.get(key)!.then((m) => m && addExtraFeatureModel(holder, f, m));
+    return;
+  }
+  void createFeatureSprites(vfs!, palette!, [{ def: f.def, cellX: f.cellX, cellZ: f.cellZ, x: f.x, y: f.y, z: f.z }]).then((sp) => {
+    holder.add(sp.group);
+    g.extraFeatures.set(f.id, { obj: holder, dispose: () => sp.dispose() });
+  });
+}
+
+function addExtraFeatureModel(holder: THREE.Group, f: SimFeature, model: UnitModel): void {
+  const inst = model.root.clone();
+  inst.position.set(f.x, f.y, f.z);
+  inst.rotation.y = Math.PI;
+  holder.add(inst);
+}
+
+/** Copies the player's line of sight into the terrain's fog. */
+function syncFog(g: Game): void {
+  const vis = g.world.visibility;
+  if (vis.version === g.fogVersion) return;
+  g.fogVersion = vis.version;
+  const grid = vis.grids[ME]!;
+  const out = new Uint8Array(grid.length);
+  for (let i = 0; i < grid.length; i++) out[i] = grid[i]! & SEEN ? 255 : grid[i]! & EXPLORED ? 150 : 85;
+  g.terrain.setFog(out, vis.width, vis.height, VIS_TILE);
+}
+
+/** Health bars over damaged or selected units the player can see. */
+const overlay = document.createElement('canvas');
+overlay.style.cssText = 'position:absolute;inset:0;pointer-events:none;width:100%;height:100%';
+view.append(overlay);
+function drawOverlay(): void {
+  const w = view.clientWidth;
+  const h = view.clientHeight;
+  if (overlay.width !== w || overlay.height !== h) {
+    overlay.width = w;
+    overlay.height = h;
+  }
+  const g = overlay.getContext('2d')!;
+  g.clearRect(0, 0, w, h);
+  if (!game) return;
+  for (const u of game.world.units.values()) {
+    if (u.dying || !game.world.isFinished(u)) continue;
+    const damaged = u.hp < u.def.maxDamage;
+    if (!damaged && !selected.has(u.id)) continue;
+    if (u.owner !== ME && !(game.world.visibility.at(ME, u.x, u.z) & SEEN)) continue;
+    const s = screenPos(u.x, u.y + u.height + 6, u.z);
+    if (s.behind || s.x < 0 || s.y < 0 || s.x > w || s.y > h) continue;
+    const bw = Math.max(16, (u.def.footprintX * 16 * 500) / rts.distance);
+    const f = Math.max(0, u.hp / u.def.maxDamage);
+    g.fillStyle = 'rgba(0,0,0,0.6)';
+    g.fillRect(s.x - bw / 2 - 1, s.y - 1, bw + 2, 5);
+    g.fillStyle = f > 0.6 ? '#4f4' : f > 0.3 ? '#ff4' : '#f44';
+    g.fillRect(s.x - bw / 2, s.y, bw * f, 3);
+  }
+  // Win or lose.
+  const lost = game.world.defeated.has(ME);
+  const won = !lost && game.world.players.every((_, p) => p === ME || game!.world.defeated.has(p)) && game.world.players.length > 1;
+  if (lost || won) {
+    g.fillStyle = 'rgba(0,0,0,0.55)';
+    g.fillRect(0, h / 2 - 40, w, 80);
+    g.fillStyle = lost ? '#ff7070' : '#8f8';
+    g.font = 'bold 28px ui-monospace, Menlo, monospace';
+    g.textAlign = 'center';
+    g.fillText(lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2 + 10);
   }
 }
 
@@ -400,6 +512,12 @@ canvas.addEventListener('contextmenu', (e) => {
   const p = localPoint(e);
   const ids = [...selected];
   const builders = builderIds();
+  // Attack an enemy unit we can see?
+  const enemy = unitAt(p, (u) => u.owner !== ME && !u.dying && game!.world.canSee(ME, u));
+  if (enemy) {
+    game.world.issue({ kind: 'attack', unitIds: ids, targetId: enemy.id, queue: e.shiftKey });
+    return;
+  }
   // Help build a half-finished unit?
   const unfinished = unitAt(p, (u) => u.owner === ME && !game!.world.isFinished(u));
   if (unfinished && builders.length) {
@@ -579,10 +697,14 @@ function describeTasks(u: SimUnit): string {
   if (!game) return '';
   const lines: string[] = [];
   if (!game.world.isFinished(u)) lines.push(`being built: ${Math.round(game.world.buildFraction(u) * 100)}%`);
+  else lines.push(`health ${Math.ceil(u.hp)}/${u.def.maxDamage}`);
+  const weaponNames = u.weapons.filter((w) => w).map((w) => `${w!.def.title} (range ${w!.def.range})`);
+  if (weaponNames.length) lines.push('weapons: ' + weaponNames.join(', '));
   for (const t of u.tasks.slice(0, 5)) {
     if (t.kind === 'move') lines.push('move');
     else if (t.kind === 'build') lines.push(`build ${assets.get(t.unitName.toLowerCase())?.def.name ?? t.unitName}`);
     else if (t.kind === 'assist') lines.push('help build');
+    else if (t.kind === 'attack') lines.push(`attack ${game.world.units.get(t.targetId)?.def.name ?? ''}`);
     else lines.push('reclaim');
   }
   if (u.factory?.queue.length) lines.push('queue: ' + u.factory.queue.map((q) => `${q.count} × ${assets.get(q.unitName.toLowerCase())?.def.name ?? q.unitName}`).join(', '));
@@ -633,8 +755,18 @@ function drawMinimap(): void {
   g.putImageData(minimapImage, 0, 0);
   const sx = minimapEl.width / game.map.widthUnits;
   const sz = minimapEl.height / game.map.heightUnits;
+  const vis = game.world.visibility;
+  g.fillStyle = 'rgba(0,0,0,0.45)';
+  const grid = vis.grids[ME]!;
+  for (let tz = 0; tz < vis.height; tz++) {
+    for (let tx = 0; tx < vis.width; tx++) {
+      if (!(grid[tz * vis.width + tx]! & SEEN)) g.fillRect(tx * VIS_TILE * sx, tz * VIS_TILE * sz, VIS_TILE * sx + 0.5, VIS_TILE * sz + 0.5);
+    }
+  }
   for (const u of game.world.units.values()) {
-    g.fillStyle = selected.has(u.id) ? '#fff' : u.owner === ME ? '#3c6cff' : '#ff3c3c';
+    const seen = u.owner === ME || (vis.at(ME, u.x, u.z) & SEEN) !== 0;
+    if (!seen && !(vis.at(ME, u.x, u.z) & RADAR)) continue;
+    g.fillStyle = selected.has(u.id) ? '#fff' : u.owner === ME ? '#3c6cff' : seen ? '#ff3c3c' : '#ff9a9a';
     const r = Math.max(2, (u.def.footprintX * 16 * sx) / 2);
     g.fillRect(u.x * sx - r / 2, u.z * sz - r / 2, r, r);
   }

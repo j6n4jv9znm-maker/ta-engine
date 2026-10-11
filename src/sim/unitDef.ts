@@ -66,6 +66,16 @@ export interface UnitDef {
   /** Footprint cells, row by row (TA yardmap letters), or empty when the whole footprint is solid. */
   yardMap: string;
   corpse: string;
+  // --- combat
+  /** Weapon names for the primary, secondary and tertiary slots (lowercase, '' when empty). */
+  weapons: [string, string, string];
+  /** Weapon used as the blast when the unit dies (and when it self-destructs). */
+  explodeAs: string;
+  selfDestructAs: string;
+  sightDistance: number;
+  radarDistance: number;
+  /** Damage multiplier while the unit is "armored" (closed up), e.g. 0.5. */
+  damageModifier: number;
   /** The class used for pathfinding; units without one use their own footprint and limits. */
   movementClass: MovementClass;
   /** The unit's own limits, used for collision checks (TA ignores the movement class there, per RWE). */
@@ -146,6 +156,12 @@ export function parseUnitDef(fbi: TdfBlock, movementClasses: Map<string, Movemen
     onOffable: n('onoffable') !== 0,
     yardMap: s('yardmap').replace(/\s+/g, ''),
     corpse: s('corpse'),
+    weapons: [s('weapon1').toLowerCase(), s('weapon2').toLowerCase(), s('weapon3').toLowerCase()],
+    explodeAs: s('explodeas').toLowerCase(),
+    selfDestructAs: s('selfdestructas').toLowerCase(),
+    sightDistance: n('sightdistance', 200),
+    radarDistance: n('radardistance'),
+    damageModifier: n('damagemodifier', 1),
     movementClass: movementClasses.get(mcName) ?? own,
     ownMovement: own,
   };
