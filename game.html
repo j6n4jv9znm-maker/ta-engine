@@ -30,10 +30,14 @@
       #selInfo { white-space: pre-line; }
       .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
       #build { display: flex; flex-direction: column; gap: 4px; }
-      #buildGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
-      #buildGrid button { text-align: left; padding: 4px 5px; line-height: 1.2; position: relative; }
-      #buildGrid button small { display: block; color: var(--dim); }
-      #buildGrid button .count { position: absolute; top: 2px; right: 4px; color: var(--accent); }
+      #buildGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+      #buildGrid button { padding: 0; position: relative; aspect-ratio: 1; overflow: hidden; background: #000; border: 2px solid #333; }
+      #buildGrid button:hover:not(:disabled) { border-color: #888; }
+      #buildGrid button.on { border-color: var(--accent); }
+      #buildGrid button img, #buildGrid button .nopic { display: block; width: 100%; height: 100%; object-fit: cover; }
+      #buildGrid button .name { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; line-height: 1.15; padding: 2px 3px; background: rgba(0, 0, 0, 0.7); color: #eee; text-align: left; }
+      #buildGrid button .count { position: absolute; top: 1px; right: 4px; font-size: 18px; font-weight: bold; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+      #buildGrid button:disabled img { filter: grayscale(1) brightness(0.5); }
       #setup { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: radial-gradient(circle at 50% 30%, #1b261b, #050805 75%); }
       #setup[hidden] { display: none; }
       .setup-box { width: min(1100px, 96vw); max-height: 94vh; display: flex; flex-direction: column; gap: 14px; }
@@ -61,7 +65,7 @@
       <h1>Total Annihilation <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
       <div id="status">Loading…</div>
       <div class="row"><button id="menu">Menu</button> <button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button> <button id="sound" class="on">Sound on</button></div>
-      <label class="row"><input id="edge" type="checkbox" /> Scroll when the pointer rests at the edge</label>
+      <label class="row"><input id="edge" type="checkbox" /> Edge scrolling</label>
       <div id="clock" class="dim"></div>
       <div id="selInfo" class="dim">Nothing selected.</div>
       <div id="commands" class="row"></div>

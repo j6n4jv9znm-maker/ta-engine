@@ -12,6 +12,7 @@ import { parsePalette, PALETTE_PATH, type Palette } from '../formats/palette';
 import { CombatRenderer } from '../graphics/combatRenderer';
 import { createFeatureSprites, type FeatureSprites } from '../graphics/featureSprites';
 import { RtsCamera } from '../graphics/rtsCamera';
+import { parsePcx } from '../formats/pcx';
 import { GameAudio, type UnitSoundKey } from '../audio/gameAudio';
 import { SetupScreen, type GameSettings } from '../ui/setupScreen';
 import { createTerrain, type Terrain } from '../graphics/terrain';
@@ -785,8 +786,11 @@ function refreshPanel(): void {
     const b = document.createElement('button');
     const queued = builder.factory?.queue.filter((q) => q.unitName === name).reduce((s, q) => s + q.count, 0) ?? 0;
     const notYet = !supported(def);
-    b.innerHTML = `${esc(def.name)}<small>${notYet ? 'not in the engine yet' : `${Math.round(def.buildCostMetal)} M · ${Math.round(def.buildCostEnergy)} E`}</small>${queued ? `<span class="count">${queued}</span>` : ''}`;
-    b.title = notYet ? 'Aircraft and ships come in a later phase.' : `${def.description}\nBuild time ${Math.round(def.buildTime)}`;
+    const pic = unitPic(name);
+    b.innerHTML = `${pic ? `<img src="${pic}" alt="">` : '<span class="nopic"></span>'}<span class="name">${esc(def.name)}</span>${queued ? `<span class="count">${queued}</span>` : ''}`;
+    b.title = notYet
+      ? `${def.name}: aircraft and ships aren't in the game yet.`
+      : `${def.name}: ${def.description}\n${Math.round(def.buildCostMetal)} metal · ${Math.round(def.buildCostEnergy)} energy · build time ${Math.round(def.buildTime)}`;
     b.disabled = notYet;
     if (notYet) b.style.opacity = '0.45';
     b.classList.toggle('on', mode.kind === 'place' && mode.unitName === name);
@@ -802,6 +806,33 @@ function refreshPanel(): void {
     grid.append(b);
   }
   buildEl.append(grid);
+}
+
+// Build-menu pictures (unitpics/<name>.pcx), decoded once and kept as data URLs.
+const unitPics = new Map<string, string | null>();
+function unitPic(name: string): string | undefined {
+  const key = name.toLowerCase();
+  const have = unitPics.get(key);
+  if (have !== undefined) return have ?? undefined;
+  unitPics.set(key, null);
+  const path = `unitpics/${key}.pcx`;
+  if (vfs?.exists(path)) {
+    void vfs.read(path).then((bytes) => {
+      try {
+        const img = parsePcx(bytes);
+        const c = document.createElement('canvas');
+        c.width = img.width;
+        c.height = img.height;
+        c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(img.rgba), img.width, img.height), 0, 0);
+        unitPics.set(key, c.toDataURL());
+        panelKey = '';
+        refreshPanelSoon();
+      } catch {
+        // no picture: the button shows the name only
+      }
+    });
+  }
+  return undefined;
 }
 
 /** Aircraft, ships and the factories that only make them aren't simulated yet. */

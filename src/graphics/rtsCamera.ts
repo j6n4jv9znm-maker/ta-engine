@@ -138,9 +138,14 @@ export class RtsCamera {
     this.lookAt(opts.mapWidth / 2, opts.mapHeight / 2);
   }
 
+  /** Centres the view on the ground at (x, z), allowing for that spot being above or below the view's fixed height. */
   lookAt(x: number, z: number): void {
-    this.target.x = x;
-    this.target.z = z;
+    const above = (this.opts.heightAt?.(x, z) ?? this.target.y) - this.target.y;
+    const c = Math.cos(this.yaw);
+    const s = Math.sin(this.yaw);
+    const shift = above / Math.tan(PITCH);
+    this.target.x = x - s * shift;
+    this.target.z = z - c * shift;
     this.clamp();
   }
 
