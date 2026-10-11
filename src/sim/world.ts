@@ -390,6 +390,7 @@ export class World {
   private onFinished(u: SimUnit): void {
     u.hp = u.def.maxDamage;
     if (u.def.activateWhenBuilt) this.setActive(u, true);
+    this.events.push({ tick: this.tickCount, kind: 'complete', unitId: u.id, owner: u.owner });
   }
 
   private setActive(u: SimUnit, on: boolean): void {

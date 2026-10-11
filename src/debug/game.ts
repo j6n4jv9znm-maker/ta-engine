@@ -12,6 +12,7 @@ import { parsePalette, PALETTE_PATH, type Palette } from '../formats/palette';
 import { CombatRenderer } from '../graphics/combatRenderer';
 import { createFeatureSprites, type FeatureSprites } from '../graphics/featureSprites';
 import { RtsCamera } from '../graphics/rtsCamera';
+import { GameAudio, type UnitSoundKey } from '../audio/gameAudio';
 import { createTerrain, type Terrain } from '../graphics/terrain';
 import { loadTextureLibrary, type TextureLibrary } from '../graphics/textures';
 import { createUnitModel, type UnitModel } from '../graphics/threeModel';
@@ -63,6 +64,7 @@ const CORE_ARMY: [string, number][] = [
 const TEAM_COLOURS = [0, 1]; // blue for you, red for the other side
 
 let vfs: Vfs | undefined;
+let audio: GameAudio | undefined;
 let palette: Palette | undefined;
 let lib: TextureLibrary | undefined;
 let featureDefs: Map<string, FeatureDef> | undefined;
@@ -159,6 +161,7 @@ function frame(t: number): void {
     const alpha = paused ? 1 : acc / TICK_MS;
     timed('units', () => g.units.update(g.world, alpha, selected));
     timed('combat', () => g.combat.update(g.world, alpha, dt / 1000, g.units, ME));
+    timed('audio', () => audio?.update(g.world, ME, listener()));
     timed('features', () => {
       syncFeatures(g);
       syncFog(g);
@@ -198,6 +201,7 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
       if (a) assets.set(name, a);
     }
     menus = await loadBuildMenus(v, new Set(defs.keys()));
+    audio = await GameAudio.load(v);
     weapons = await loadWeaponDefs(v);
     aiPlans = await loadAiProfile(v);
     mapSel.textContent = '';
@@ -219,6 +223,7 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
 async function startGame(mapName: string): Promise<void> {
   if (!vfs || !palette || !lib || !featureDefs) return;
   statusEl.textContent = `Loading ${mapName}…`;
+  audio?.reset();
   const map = await loadGameMap(vfs, mapName, featureDefs);
   const world = new World(map, { seed: 20261011, assets: (n) => assets.get(n.toLowerCase()), weapons, featureDefs });
   const starts = map.ota?.schemas[0]?.startPositions.filter((p): p is { x: number; z: number } => !!p) ?? [];
@@ -247,7 +252,7 @@ async function startGame(mapName: string): Promise<void> {
   group.add(terrain.mesh, sprites.group, featureGroup, units.group, combat.group);
   scene.add(group);
   game = { map, world, terrain, sprites, featureModels, featureObjects, hiddenFeatures: new Set(), extraFeatures: new Map(), units, combat, fogVersion: -1, group };
-  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt };
+  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt, audio };
   selected.clear();
   setMode({ kind: 'select' });
   acc = 0;
@@ -493,18 +498,28 @@ window.addEventListener('mouseup', (e) => {
     const hit = groundAt(p);
     if (builder && hit) {
       const site = game.world.buildSite(mode.unitName, hit.x, hit.z);
-      if (site.ok && !overlapsQueued(mode.unitName, site)) game.world.issue({ kind: 'build', unitId: builder.id, unitName: mode.unitName, x: site.x, z: site.z, queue: e.shiftKey });
+      if (site.ok && !overlapsQueued(mode.unitName, site)) {
+        game.world.issue({ kind: 'build', unitId: builder.id, unitName: mode.unitName, x: site.x, z: site.z, queue: e.shiftKey });
+        reply('ok1');
+      } else {
+        reply('cant1');
+        if (!e.shiftKey) return; // stay in placing mode so the player can try another spot
+      }
     }
     if (!e.shiftKey) setMode({ kind: 'select' });
     return;
   }
   if (mode.kind === 'reclaim') {
     const f = featureAt(p);
-    if (f) game.world.issue({ kind: 'reclaim', unitIds: builderIds(), featureId: f.id, queue: e.shiftKey });
+    if (f) {
+      game.world.issue({ kind: 'reclaim', unitIds: builderIds(), featureId: f.id, queue: e.shiftKey });
+      reply('ok1');
+    }
     if (!e.shiftKey) setMode({ kind: 'select' });
     return;
   }
 
+  const before = new Set(selected);
   if (!e.shiftKey) selected.clear();
   if (Math.hypot(p.x - start.x, p.y - start.y) < 5) {
     const u = unitAt(p, mineFinished);
@@ -528,6 +543,7 @@ window.addEventListener('mouseup', (e) => {
   }
   menuPage = 0;
   refreshPanel();
+  if ([...selected].some((id) => !before.has(id))) reply('select1');
 });
 
 canvas.addEventListener('contextmenu', (e) => {
@@ -545,23 +561,27 @@ canvas.addEventListener('contextmenu', (e) => {
   const enemy = unitAt(p, (u) => u.owner !== ME && !u.dying && game!.world.canSee(ME, u));
   if (enemy) {
     game.world.issue({ kind: 'attack', unitIds: ids, targetId: enemy.id, queue: e.shiftKey });
+    reply('ok1');
     return;
   }
   // Help build a half-finished unit?
   const unfinished = unitAt(p, (u) => u.owner === ME && !game!.world.isFinished(u));
   if (unfinished && builders.length) {
     game.world.issue({ kind: 'assist', unitIds: builders, targetId: unfinished.id, queue: e.shiftKey });
+    reply('ok1');
     return;
   }
   // Reclaim a rock, tree or wreck?
   const f = builders.length ? featureAt(p) : undefined;
   if (f) {
     game.world.issue({ kind: 'reclaim', unitIds: builders, featureId: f.id, queue: e.shiftKey });
+    reply('ok1');
     return;
   }
   const hit = groundAt(p);
   if (!hit) return;
   game.world.issue({ kind: 'move', unitIds: ids, x: hit.x, z: hit.z, queue: e.shiftKey });
+  reply('ok1');
   showMoveMarker(hit);
 });
 
@@ -594,6 +614,22 @@ window.addEventListener('keydown', (e) => {
     }
   }
 });
+
+/** The first selected unit answers with one of its sounds (TA plays one reply per order, not one per unit). */
+function reply(key: UnitSoundKey): void {
+  const u = game ? [...selected].map((id) => game!.world.units.get(id)).find((x) => x) : undefined;
+  if (u) audio?.unitSound(u.def, key);
+}
+
+/** Where sounds are heard from: the middle of the view, and how wide the view is on the ground. */
+function listener(): { x: number; z: number; halfWidth: number } {
+  const halfHeight = rts.distance * Math.tan(THREE.MathUtils.degToRad(rts.camera.fov / 2));
+  return { x: rts.target.x, z: rts.target.z, halfWidth: halfHeight * rts.camera.aspect };
+}
+
+// Browsers only allow sound once the player has clicked or pressed a key.
+window.addEventListener('pointerdown', () => audio?.unlock(), true);
+window.addEventListener('keydown', () => audio?.unlock(), true);
 
 function setMode(m: Mode): void {
   mode = m;
@@ -919,6 +955,12 @@ $('restart').addEventListener('click', () => void startGame(mapSel.value));
 $<HTMLInputElement>('edge').addEventListener('change', (e) => {
   rts.edgeScroll = (e.target as HTMLInputElement).checked;
   (e.target as HTMLInputElement).blur();
+});
+$('sound').addEventListener('click', () => {
+  if (!audio) return;
+  audio.muted = !audio.muted;
+  $('sound').textContent = audio.muted ? 'Sound off' : 'Sound on';
+  $('sound').classList.toggle('on', !audio.muted);
 });
 $('pause').addEventListener('click', () => {
   paused = !paused;

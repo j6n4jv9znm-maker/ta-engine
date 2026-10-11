@@ -64,8 +64,11 @@ export interface Projectile {
 }
 
 export type CombatEvent =
-  | { tick: number; kind: 'explosion'; x: number; y: number; z: number; gaf: string; art: string; radius: number }
-  | { tick: number; kind: 'fire'; unitId: number; weapon: string; x: number; y: number; z: number }
+  | { tick: number; kind: 'explosion'; x: number; y: number; z: number; gaf: string; art: string; radius: number; sound: string }
+  /** `first` is the first shot of a burst. */
+  | { tick: number; kind: 'fire'; unitId: number; weapon: string; x: number; y: number; z: number; first: boolean }
+  /** A unit finished being built. */
+  | { tick: number; kind: 'complete'; unitId: number; owner: number }
   | { tick: number; kind: 'death'; unitId: number; unitName: string; x: number; y: number; z: number }
   /** A unit script blew a piece off (explode); `flags` are TA's explode types (SHATTER, FALL, ...). */
   | { tick: number; kind: 'debris'; unitId: number; piece: string; flags: number };
@@ -168,7 +171,7 @@ function tryFire(world: World, u: SimUnit, slot: WeaponSlot, index: WeaponIndex)
   }
   const distance = Math.hypot(to[0] - fx, to[1] - fy, to[2] - fz);
   world.spawnProjectile(u.owner, w, [fx, fy, fz], dir, distance, target?.id);
-  world.events.push({ tick: world.tickCount, kind: 'fire', unitId: u.id, weapon: w.name, x: fx, y: fy, z: fz });
+  world.events.push({ tick: world.tickCount, kind: 'fire', unitId: u.id, weapon: w.name, x: fx, y: fy, z: fz, first: b.fired === 0 });
 
   if (b.fired === 0) {
     u.scripts?.start(`Fire${SCRIPT_SUFFIX[index]}`);
@@ -294,6 +297,7 @@ export function explode(world: World, w: WeaponDef, owner: number, x: number, y:
     gaf: water && w.waterExplosionGaf ? w.waterExplosionGaf : w.explosionGaf,
     art: water && w.waterExplosionArt ? w.waterExplosionArt : w.explosionArt,
     radius: w.damageRadius,
+    sound: water && w.soundWater ? w.soundWater : w.soundHit,
   });
   const r = Math.max(1, w.damageRadius);
   for (const u of world.unitsInOrder()) {

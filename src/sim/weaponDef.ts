@@ -50,6 +50,11 @@ export interface WeaponDef {
   waterExplosionArt: string;
   smokeTrail: boolean;
   toAirWeapon: boolean;
+  /** Sound names (sounds/<name>.wav): on firing, on hitting, on hitting water; soundTrigger plays the start sound once per burst. */
+  soundStart: string;
+  soundHit: string;
+  soundWater: string;
+  soundTrigger: boolean;
 }
 
 export async function loadWeaponDefs(vfs: Vfs): Promise<Map<string, WeaponDef>> {
@@ -106,6 +111,10 @@ export function parseWeaponDef(name: string, b: TdfBlock): WeaponDef {
     waterExplosionArt: s('waterexplosionart'),
     smokeTrail: flag('smoketrail'),
     toAirWeapon: flag('toairweapon'),
+    soundStart: s('soundstart').toLowerCase(),
+    soundHit: s('soundhit').toLowerCase(),
+    soundWater: s('soundwater').toLowerCase(),
+    soundTrigger: flag('soundtrigger'),
   };
 }
 

@@ -63,6 +63,7 @@ function def(over: Partial<UnitDef>): UnitAssets {
     damageModifier: 1,
     categories: [],
     tedClass: '',
+    soundCategory: '',
     movementClass: ground,
     ownMovement: ground,
     ...over,
