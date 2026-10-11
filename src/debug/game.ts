@@ -13,6 +13,7 @@ import { CombatRenderer } from '../graphics/combatRenderer';
 import { createFeatureSprites, type FeatureSprites } from '../graphics/featureSprites';
 import { RtsCamera } from '../graphics/rtsCamera';
 import { GameAudio, type UnitSoundKey } from '../audio/gameAudio';
+import { SetupScreen, type GameSettings } from '../ui/setupScreen';
 import { createTerrain, type Terrain } from '../graphics/terrain';
 import { loadTextureLibrary, type TextureLibrary } from '../graphics/textures';
 import { createUnitModel, type UnitModel } from '../graphics/threeModel';
@@ -33,9 +34,6 @@ import { openDevServerVfs, openPickedVfs } from './devData';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $('status');
-const mapSel = $<HTMLSelectElement>('map');
-const startWithSel = $<HTMLSelectElement>('startWith');
-const opponentSel = $<HTMLSelectElement>('opponent');
 const clockEl = $('clock');
 const selInfoEl = $('selInfo');
 const commandsEl = $('commands');
@@ -91,6 +89,8 @@ interface Game {
 let game: Game | undefined;
 const selected = new Set<number>();
 let paused = false;
+let setup: SetupScreen | undefined;
+let settings: GameSettings | undefined;
 let speed = 1;
 
 /** What a left-click does right now. */
@@ -145,7 +145,7 @@ function frame(t: number): void {
   last = t;
   rts.update(dt / 1000);
   timed('sim', () => {
-    if (game && !paused) {
+    if (game && !paused && !setup?.visible) {
       acc += dt * speed;
       let steps = 0;
       while (acc >= TICK_MS && steps++ < 20) {
@@ -204,24 +204,23 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     audio = await GameAudio.load(v);
     weapons = await loadWeaponDefs(v);
     aiPlans = await loadAiProfile(v);
-    mapSel.textContent = '';
-    for (const name of listMaps(v)) {
-      if (/example/i.test(name)) continue;
-      const o = document.createElement('option');
-      o.value = o.textContent = name;
-      mapSel.append(o);
-    }
-    // Ashap Plateau is a classic open two-player map; good for a first game against the computer.
-    const preferred = ['Ashap Plateau', 'The Pass'].find((n) => [...mapSel.options].some((o) => o.value === n));
-    mapSel.value = preferred ?? mapSel.options[0]?.value ?? '';
-    await startGame(mapSel.value);
+    const maps = listMaps(v)
+      .filter((n) => !/example/i.test(n))
+      .sort((a, b) => a.localeCompare(b));
+    setup?.el.remove();
+    setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined);
+    document.body.append(setup.el);
+    setup.show(false);
+    statusEl.textContent = 'Pick a map and press Start game.';
   } catch (e) {
     statusEl.textContent = String(e);
   }
 }
 
-async function startGame(mapName: string): Promise<void> {
+async function startGame(s: GameSettings): Promise<void> {
   if (!vfs || !palette || !lib || !featureDefs) return;
+  settings = s;
+  const mapName = s.map;
   statusEl.textContent = `Loading ${mapName}…`;
   audio?.reset();
   const map = await loadGameMap(vfs, mapName, featureDefs);
@@ -230,14 +229,15 @@ async function startGame(mapName: string): Promise<void> {
   const mine = starts[0] ?? { x: map.widthUnits / 2, z: map.heightUnits / 2 };
   const theirs = starts[1];
   const face = (z: number) => (z < map.heightUnits / 2 ? 0 : 32768);
-  world.spawn(assets.get('armcom')!, ME, mine.x, mine.z, face(mine.z));
-  const armies = startWithSel.value === 'army';
-  if (armies) spawnGroup(world, ARMY, ME, mine.x, mine.z + (mine.z < map.heightUnits / 2 ? 120 : -120));
+  const arm = s.side === 'arm';
+  world.spawn(assets.get(arm ? 'armcom' : 'corcom')!, ME, mine.x, mine.z, face(mine.z));
+  const armies = s.startWith === 'army';
+  if (armies) spawnGroup(world, arm ? ARMY : CORE_ARMY, ME, mine.x, mine.z + (mine.z < map.heightUnits / 2 ? 120 : -120));
   if (theirs) {
-    world.spawn(assets.get('corcom')!, 1, theirs.x, theirs.z, face(theirs.z));
-    if (armies) spawnGroup(world, CORE_ARMY, 1, theirs.x, theirs.z + (theirs.z < map.heightUnits / 2 ? 120 : -120));
+    world.spawn(assets.get(arm ? 'corcom' : 'armcom')!, 1, theirs.x, theirs.z, face(theirs.z));
+    if (armies) spawnGroup(world, arm ? CORE_ARMY : ARMY, 1, theirs.x, theirs.z + (theirs.z < map.heightUnits / 2 ? 120 : -120));
   }
-  const difficulty = opponentSel.value as Difficulty | 'none';
+  const difficulty = s.opponent;
   if (difficulty !== 'none') world.ais.push(new SkirmishAi(1, difficulty, menus, aiPlans.get(difficulty), 977));
 
   const terrain = createTerrain(map.tnt, palette);
@@ -402,7 +402,7 @@ function drawOverlay(): void {
     g.fillText(lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2);
     g.font = '14px ui-monospace, Menlo, monospace';
     g.fillStyle = '#ddd';
-    g.fillText('Press Restart (top left) to play again.', w / 2, h / 2 + 26);
+    g.fillText('Press Restart to play again, or Menu for a new game.', w / 2, h / 2 + 26);
   }
 }
 
@@ -948,10 +948,8 @@ minimapEl.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('change', (e) => (e.target as HTMLElement).tagName === 'SELECT' && (e.target as HTMLElement).blur());
 document.addEventListener('click', (e) => (e.target as HTMLElement).closest('button')?.blur());
 canvas.addEventListener('mousedown', () => (document.activeElement as HTMLElement | null)?.blur?.());
-mapSel.addEventListener('change', () => void startGame(mapSel.value));
-startWithSel.addEventListener('change', () => void startGame(mapSel.value));
-opponentSel.addEventListener('change', () => void startGame(mapSel.value));
-$('restart').addEventListener('click', () => void startGame(mapSel.value));
+$('restart').addEventListener('click', () => settings && void startGame(settings));
+$('menu').addEventListener('click', () => setup?.show(!!game));
 $<HTMLInputElement>('edge').addEventListener('change', (e) => {
   rts.edgeScroll = (e.target as HTMLInputElement).checked;
   (e.target as HTMLInputElement).blur();

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TA Sandbox</title>
+    <title>Total Annihilation</title>
     <style>
       :root { color-scheme: dark; --bg: #0d110d; --panel: #151b15; --line: #2a352a; --text: #d6e6d6; --dim: #7f947f; --accent: #8f8; --metal: #b9c4cf; --energy: #f2d64b; --bad: #ff6b6b; }
       * { box-sizing: border-box; }
@@ -34,16 +34,33 @@
       #buildGrid button { text-align: left; padding: 4px 5px; line-height: 1.2; position: relative; }
       #buildGrid button small { display: block; color: var(--dim); }
       #buildGrid button .count { position: absolute; top: 2px; right: 4px; color: var(--accent); }
+      #setup { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: radial-gradient(circle at 50% 30%, #1b261b, #050805 75%); }
+      #setup[hidden] { display: none; }
+      .setup-box { width: min(1100px, 96vw); max-height: 94vh; display: flex; flex-direction: column; gap: 14px; }
+      .setup-box h1 { font-size: 30px; letter-spacing: 6px; text-transform: uppercase; text-align: center; color: var(--accent); text-shadow: 0 0 12px rgba(136, 255, 136, 0.35); }
+      .setup-box h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 2px; color: var(--dim); margin: 10px 0 6px; }
+      .setup-cols { display: grid; grid-template-columns: 260px 1fr 260px; gap: 18px; min-height: 0; }
+      .setup-maps { display: flex; flex-direction: column; min-height: 0; }
+      .setup-list { overflow: auto; max-height: 70vh; display: flex; flex-direction: column; gap: 2px; padding-right: 4px; }
+      .setup-list button { text-align: left; border-color: transparent; background: transparent; }
+      .setup-list button:hover { background: var(--panel); }
+      .setup-preview { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+      .setup-preview canvas { width: 100%; max-width: 460px; image-rendering: pixelated; border: 1px solid var(--line); background: #000; }
+      .setup-details { color: var(--text); line-height: 1.6; width: 100%; max-width: 460px; }
+      .setup-details .warn { color: #ffb347; }
+      .choice { display: flex; gap: 6px; flex-wrap: wrap; }
+      .choice button { flex: 1; padding: 8px; }
+      .setup-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
+      button.big { font-size: 16px; padding: 12px; }
+      button.big.start { border-color: var(--accent); color: var(--accent); background: #1d2c1d; }
+      button[hidden] { display: none; }
     </style>
   </head>
   <body>
     <aside id="side">
-      <h1>TA Sandbox <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
+      <h1>Total Annihilation <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
       <div id="status">Loading…</div>
-      <label class="row">Map <select id="map"></select></label>
-      <label class="row">Start with <select id="startWith"><option value="commander">a Commander</option><option value="army">two armies</option></select></label>
-      <label class="row">Opponent <select id="opponent"><option value="easy">computer, easy</option><option value="medium" selected>computer, medium</option><option value="hard">computer, hard</option><option value="none">nobody (sandbox)</option></select></label>
-      <div class="row"><button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button> <button id="sound" class="on">Sound on</button></div>
+      <div class="row"><button id="menu">Menu</button> <button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button> <button id="sound" class="on">Sound on</button></div>
       <label class="row"><input id="edge" type="checkbox" /> Scroll when the pointer rests at the edge</label>
       <div id="clock" class="dim"></div>
       <div id="selInfo" class="dim">Nothing selected.</div>
@@ -66,7 +83,7 @@
         <div class="res energy"><span>Energy</span><div class="bar"><div class="fill" id="eFill"></div></div><span id="eText"></span></div>
       </div>
       <div id="box"></div>
-      <div id="hint">Skirmish: you (blue, Arm) against the computer (red, Core).</div>
+      <div id="hint">You are blue; the computer is red.</div>
     </main>
     <script type="module" src="/src/debug/game.ts"></script>
   </body>
