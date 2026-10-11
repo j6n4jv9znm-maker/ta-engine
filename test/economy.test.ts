@@ -55,6 +55,12 @@ function def(over: Partial<UnitDef>): UnitAssets {
     onOffable: false,
     yardMap: '',
     corpse: '',
+    weapons: ['', '', ''],
+    explodeAs: '',
+    selfDestructAs: '',
+    sightDistance: 300,
+    radarDistance: 0,
+    damageModifier: 1,
     movementClass: ground,
     ownMovement: ground,
     ...over,
@@ -70,7 +76,7 @@ const ALL = new Map([COMMANDER, SOLAR, LAB, TANK].map((a) => [a.def.unitName.toL
 
 const rock: FeatureDef = {
   name: 'rock', world: '', description: 'Rock', category: '', footprintX: 2, footprintZ: 2, height: 8, fileName: '', seqName: '', seqNameShadow: '', object: '',
-  animTrans: false, shadTrans: false, blocking: true, indestructible: false, reclaimable: true, metal: 40, energy: 0,
+  animTrans: false, shadTrans: false, blocking: true, indestructible: false, reclaimable: true, metal: 40, energy: 0, featureDead: '', damage: 100,
 };
 
 function flatMap(w = 64, h = 64): GameMap {

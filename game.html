@@ -41,7 +41,7 @@
       <h1>TA Sandbox <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
       <div id="status">Loading…</div>
       <label class="row">Map <select id="map"></select></label>
-      <label class="row">Start with <select id="startWith"><option value="commander">a Commander</option><option value="army">a Commander and an army</option></select></label>
+      <label class="row">Start with <select id="startWith"><option value="commander">a Commander</option><option value="army">two armies (you against red)</option></select></label>
       <div class="row"><button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button></div>
       <div id="clock" class="dim"></div>
       <div id="selInfo" class="dim">Nothing selected.</div>
@@ -49,7 +49,7 @@
       <div id="build"></div>
       <div class="dim">
         Left-click a unit to select it, or drag a box. Shift adds. Ctrl+A selects everything.<br />
-        Right-click: move; on a rock, tree or wreck with builders: reclaim; on a half-built unit: help build.<br />
+        Right-click: move; on an enemy: attack; on a rock, tree or wreck with builders: reclaim; on a half-built unit: help build.<br />
         Builders: pick something to build, then left-click the ground (shift to queue more). Right-click or Esc cancels.<br />
         Factories: click a unit to queue it (shift: 5), right-click to remove. Right-click the ground sets the rally point.<br />
         S stops. Arrows or screen edge scroll, wheel zooms, middle-drag pans.
@@ -63,7 +63,7 @@
         <div class="res energy"><span>Energy</span><div class="bar"><div class="fill" id="eFill"></div></div><span id="eText"></span></div>
       </div>
       <div id="box"></div>
-      <div id="hint">Phase 6 sandbox: build a base and an army. No fighting yet.</div>
+      <div id="hint">Sandbox: build, fight, win. No computer opponent yet: red only shoots back.</div>
     </main>
     <script type="module" src="/src/debug/game.ts"></script>
   </body>

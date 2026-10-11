@@ -30,6 +30,9 @@ export interface FeatureDef {
   reclaimable: boolean;
   metal: number;
   energy: number;
+  /** What this feature turns into when destroyed (e.g. a wreck into a heap). */
+  featureDead: string;
+  damage: number;
 }
 
 /** RWE draws features at least this tall as upright sprites; shorter ones lie flat on the ground. */
@@ -77,5 +80,7 @@ function toDef(name: string, b: TdfBlock): FeatureDef {
     reclaimable: n('reclaimable') !== 0,
     metal: n('metal'),
     energy: n('energy'),
+    featureDead: s('featuredead'),
+    damage: n('damage'),
   };
 }

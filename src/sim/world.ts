@@ -1,7 +1,11 @@
 import type { ModelPiece } from '../formats/3do';
 import type { CobScript } from '../formats/cob';
 import { CELL_SIZE } from '../formats/tnt';
+import type { ModelPiece as Piece } from '../formats/3do';
 import type { FeatureDef } from '../map/features';
+import { explode, makeWeaponSlots, updateProjectiles, updateWeapons, type CombatEvent, type Projectile, type WeaponSlot } from './combat';
+import { Visibility, RADAR, SEEN } from './visibility';
+import type { WeaponDef } from './weaponDef';
 import type { GameMap } from '../map/mapData';
 import { PlayerEconomy } from './economy';
 import { Occupancy, yardCellPassable } from './occupancy';
@@ -40,7 +44,8 @@ export type Task =
   | { kind: 'move'; x: number; z: number; started?: boolean }
   | { kind: 'build'; unitName: string; x: number; z: number; targetId?: number; started?: boolean; waited?: number }
   | { kind: 'assist'; unitId: number; started?: boolean; waited?: number }
-  | { kind: 'reclaim'; featureId: number; progress: number; started?: boolean; waited?: number };
+  | { kind: 'reclaim'; featureId: number; progress: number; started?: boolean; waited?: number }
+  | { kind: 'attack'; targetId: number; started?: boolean };
 
 export type Command =
   | { kind: 'move'; unitIds: number[]; x: number; z: number; queue?: boolean }
@@ -51,7 +56,8 @@ export type Command =
   /** Factory queue: add `count` (negative removes). */
   | { kind: 'factory'; unitId: number; unitName: string; count: number }
   | { kind: 'rally'; unitId: number; x: number; z: number }
-  | { kind: 'activate'; unitIds: number[]; on: boolean };
+  | { kind: 'activate'; unitIds: number[]; on: boolean }
+  | { kind: 'attack'; unitIds: number[]; targetId: number; queue?: boolean };
 
 export interface SimFeature {
   readonly id: number;
@@ -126,6 +132,13 @@ export interface SimUnit {
   yardOpen: boolean;
   /** The factory a newly built unit is driving out of; its walls don't block it until it's out. */
   exitFactory: number | undefined;
+  /** Model height, for hit boxes and aiming. */
+  readonly height: number;
+  weapons: (WeaponSlot | undefined)[];
+  /** Set once the unit has been destroyed; it plays its Killed script, then leaves a wreck and goes. */
+  dying: { since: number; severity: number; thread: import('./cob/vm').CobThread | undefined } | undefined;
+  /** Cached answers to piece queries (QueryPrimary, AimFromPrimary, QueryNanoPiece...). */
+  pieceQueries: Map<string, string | undefined>;
 }
 
 export interface UnitAssets {
@@ -139,6 +152,10 @@ export interface WorldOptions {
   /** Look up a unit type's definition, model and script (all buildable types must be preloaded). */
   assets: (unitName: string) => UnitAssets | undefined;
   players?: number;
+  /** Lowercase weapon name -> definition. */
+  weapons?: Map<string, WeaponDef>;
+  /** Lowercase feature name -> definition, for wrecks. */
+  featureDefs?: Map<string, FeatureDef>;
 }
 
 const WAYPOINT_RADIUS = 16;
@@ -161,8 +178,18 @@ export class World {
   /** Metal value per height cell (what extractors dig up). */
   readonly metal: Float32Array;
   readonly rng: Rng;
+  readonly weaponDefs: Map<string, WeaponDef>;
+  readonly featureDefs: Map<string, FeatureDef>;
+  projectiles: Projectile[] = [];
+  /** Recent things the renderer may want to show (explosions, shots, deaths); kept for a few seconds. */
+  events: CombatEvent[] = [];
+  readonly visibility: Visibility;
+  /** Players knocked out (their Commander died). */
+  readonly defeated = new Set<number>();
   tickCount = 0;
   windSpeed = 0;
+  private nextProjectileId = 1;
+  private orderCache: SimUnit[] | undefined;
   private nextWindChange = 0;
   private nextId = 1;
   private queue: Command[] = [];
@@ -178,6 +205,9 @@ export class World {
     this.terrain = new SimTerrain(map.tnt);
     this.occupancy = new Occupancy(map.tnt.width, map.tnt.height);
     this.rng = new Rng(opts.seed);
+    this.weaponDefs = opts.weapons ?? new Map();
+    this.featureDefs = opts.featureDefs ?? new Map();
+    this.visibility = new Visibility(map.widthUnits, map.heightUnits, opts.players ?? 2);
     const schema = map.ota?.schemas[0];
     for (let p = 0; p < (opts.players ?? 2); p++) {
       this.players.push(new PlayerEconomy(schema?.humanMetal ?? 1000, schema?.humanEnergy ?? 1000));
@@ -314,8 +344,14 @@ export class World {
       nanoPiece: undefined,
       yardOpen: false,
       exitFactory: undefined,
+      height: modelHeight(assets.model),
+      weapons: [],
+      dying: undefined,
+      pieceQueries: new Map(),
     };
+    unit.weapons = makeWeaponSlots(this, unit);
     this.units.set(id, unit);
+    this.orderCache = undefined;
     this.occupy(unit);
     scripts?.start('Create');
     if (finished) this.onFinished(unit);
@@ -357,16 +393,33 @@ export class World {
 
     if (this.tickCount % TICKS_PER_SECOND === 0) this.updateEconomy();
     this.updateWind();
+    if (this.tickCount % 15 === 0) this.updateVisibility();
 
-    const ordered = [...this.units.values()].sort((a, b) => a.id - b.id);
-    for (const u of ordered) {
+    for (const u of this.unitsInOrder()) {
       u.prevX = u.x;
       u.prevY = u.y;
       u.prevZ = u.z;
       u.prevRotation = u.rotation;
-      this.updateUnit(u);
+      if (u.dying) this.updateDying(u);
+      else this.updateUnit(u);
     }
+    updateProjectiles(this);
+    // Pass script events (pieces blown off) on to the renderer.
+    for (const u of this.unitsInOrder()) {
+      if (!u.scripts || u.scripts.events.length === 0) continue;
+      for (const e of u.scripts.events) {
+        if (e.kind === 'explode') this.events.push({ tick: this.tickCount, kind: 'debris', unitId: u.id, piece: e.piece, flags: e.type });
+      }
+      u.scripts.events = [];
+    }
+    this.events = this.events.filter((e) => this.tickCount - e.tick < 3 * TICKS_PER_SECOND);
     this.tickCount++;
+  }
+
+  /** Units sorted by id (the order everything is processed in), cached until the set changes. */
+  unitsInOrder(): SimUnit[] {
+    this.orderCache ??= [...this.units.values()].sort((a, b) => a.id - b.id);
+    return this.orderCache;
   }
 
   private apply(c: Command): void {
@@ -442,11 +495,16 @@ export class World {
       case 'activate':
         for (const u of this.ownUnits(c.unitIds)) if (u.def.onOffable) this.setActive(u, c.on);
         return;
+      case 'attack':
+        for (const u of this.ownUnits(c.unitIds)) {
+          if (u.weapons.some((w) => w && !w.def.commandFire) && c.targetId !== u.id) this.giveTask(u, { kind: 'attack', targetId: c.targetId }, c.queue);
+        }
+        return;
     }
   }
 
   private ownUnits(ids: number[]): SimUnit[] {
-    return ids.map((id) => this.units.get(id)).filter((u): u is SimUnit => !!u && this.isFinished(u));
+    return ids.map((id) => this.units.get(id)).filter((u): u is SimUnit => !!u && this.isFinished(u) && !u.dying);
   }
 
   private canWalk(u: SimUnit): boolean {
@@ -480,6 +538,8 @@ export class World {
     if (this.isFinished(u)) {
       if (u.factory) this.updateFactory(u);
       else this.runTask(u);
+      const t = u.tasks[0];
+      updateWeapons(this, u, t?.kind === 'attack' ? t.targetId : undefined);
     }
     if (u.def.bmCode === 0 && u.scripts && u.scripts.state.yardOpen !== u.yardOpen) this.occupy(u);
 
@@ -536,6 +596,18 @@ export class World {
       case 'reclaim':
         this.runReclaim(u, t);
         return;
+      case 'attack': {
+        const target = this.units.get(t.targetId);
+        if (!target || target.dying) return this.finishTask(u);
+        // Close in until the shortest-ranged weapon reaches, then hold position and shoot.
+        const range = Math.min(...u.weapons.filter((w): w is WeaponSlot => !!w && !w.def.commandFire).map((w) => w.def.range));
+        if (Math.hypot(target.x - u.x, target.z - u.z) > range * 0.9) this.driveTo(u, target.x, target.z);
+        else {
+          u.order = undefined;
+          u.path = undefined;
+        }
+        return;
+      }
     }
   }
 
@@ -805,6 +877,130 @@ export class World {
     if (u.def.bmCode === 0) this.occupancy.clearBuilding(u.cellX, u.cellZ, u.def.footprintX, u.def.footprintZ, u.id);
     else this.occupancy.clearUnit(u.cellX, u.cellZ, u.def.footprintX, u.def.footprintZ, u.id);
     this.units.delete(u.id);
+    this.orderCache = undefined;
+  }
+
+  // --- combat ------------------------------------------------------------------------
+
+  /** Whether `player` can see (or has on radar) unit `u`. A player always sees its own units. */
+  canSee(player: number, u: SimUnit): boolean {
+    return u.owner === player || (this.visibility.at(player, u.x, u.z) & (SEEN | RADAR)) !== 0;
+  }
+
+  /** Answers a piece query script once per unit (they always name the same piece). */
+  queryPiece(u: SimUnit, script: string): string | undefined {
+    if (!u.pieceQueries.has(script)) {
+      const idx = u.scripts?.vm.hasFunction(script) ? u.scripts.query(script) : undefined;
+      u.pieceQueries.set(script, idx !== undefined && u.scripts ? u.scripts.pieceName(idx) : undefined);
+    }
+    return u.pieceQueries.get(script);
+  }
+
+  /** A piece's position in the world right now (or the unit's middle when there's no such piece). */
+  piecePositionWorld(u: SimUnit, piece: string | undefined): [number, number, number] {
+    if (!piece || !u.scripts) return [u.x, u.y + u.height / 2, u.z];
+    const [lx, ly, lz] = u.scripts.piecePosition(piece);
+    const [wx, wy, wz] = rotateYXZ([lx, ly, lz], 0, angleToRadians(u.rotation), 0);
+    return [u.x + wx, u.y + wy, u.z + wz];
+  }
+
+  spawnProjectile(owner: number, w: WeaponDef, from: [number, number, number], dir: [number, number, number], distance: number, targetUnit: number | undefined): void {
+    let dieTick: number | undefined;
+    if (w.timerTicks !== undefined) {
+      dieTick = this.tickCount + w.timerTicks - Math.floor(w.randomDecayTicks / 2) + this.rng.int(0, w.randomDecayTicks);
+    } else if (w.kind === 'lineOfSight') {
+      dieTick = this.tickCount + Math.floor(distance / Math.max(0.01, w.velocity)) + 1;
+    }
+    this.projectiles.push({
+      id: this.nextProjectileId++,
+      owner,
+      weapon: w,
+      x: from[0],
+      y: from[1],
+      z: from[2],
+      prevX: from[0],
+      prevY: from[1],
+      prevZ: from[2],
+      vx: dir[0] * w.velocity,
+      vy: dir[1] * w.velocity,
+      vz: dir[2] * w.velocity,
+      dieTick,
+      targetUnit,
+      originX: from[0],
+      originY: from[1],
+      originZ: from[2],
+      dead: false,
+    });
+  }
+
+  /** Applies damage; a unit at zero hit points dies (quietly if it was still being built, as in RWE). */
+  damage(u: SimUnit, amount: number, _attacker: number): void {
+    if (u.dying || amount <= 0) return;
+    u.hp -= amount;
+    if (u.hp > 0) return;
+    if (!this.isFinished(u)) {
+      this.removeUnit(u);
+      return;
+    }
+    this.kill(u, Math.min(100, Math.round((amount / u.def.maxDamage) * 100)));
+  }
+
+  /**
+   * Starts a unit's death: its Killed(severity, corpsetype) script runs (pieces fly off via explode),
+   * its death blast ("explodeas") goes off, and when the script is done the unit is replaced by its wreck.
+   * A Commander's death knocks its player out: all their units die too, as in RWE.
+   */
+  kill(u: SimUnit, severity: number): void {
+    if (u.dying) return;
+    this.abortTasks(u);
+    if (u.factory) {
+      this.cancelInFactory(u);
+      u.factory.queue = [];
+    }
+    u.speed = 0;
+    u.dying = { since: this.tickCount, severity, thread: u.scripts?.vm.start('Killed', [severity, 0]) };
+    this.events.push({ tick: this.tickCount, kind: 'death', unitId: u.id, unitName: u.def.unitName, x: u.x, y: u.y, z: u.z });
+    const blast = this.weaponDefs.get(u.def.explodeAs);
+    if (blast) explode(this, blast, u.owner, u.x, u.y + u.height / 2, u.z, u.y < this.terrain.seaLevel);
+    if (u.def.commander && !this.defeated.has(u.owner)) {
+      this.defeated.add(u.owner);
+      for (const o of this.unitsInOrder()) if (o.owner === u.owner && o !== u && !o.dying) this.isFinished(o) ? this.kill(o, 100) : this.removeUnit(o);
+    }
+  }
+
+  private updateDying(u: SimUnit): void {
+    u.scripts?.tick();
+    const d = u.dying!;
+    const t = d.thread;
+    const done = !t || t.killed || t.state.kind === 'finished' || this.tickCount - d.since > 3 * TICKS_PER_SECOND;
+    if (!done) return;
+    // corpsetype: 1 = wreck, 2 = heap (the wreck's "featuredead"), 3 = nothing.
+    const corpseType = (t && t.state.kind === 'finished' ? t.returnLocals[1] : undefined) || 1;
+    this.removeUnit(u);
+    let wreck = u.def.corpse ? this.featureDefs.get(u.def.corpse.toLowerCase()) : undefined;
+    if (corpseType === 2) wreck = wreck?.featureDead ? this.featureDefs.get(wreck.featureDead.toLowerCase()) : undefined;
+    if (corpseType >= 3) wreck = undefined;
+    if (wreck) this.addFeature(wreck, u.x, u.z);
+  }
+
+  /** Places a feature (a wreck or heap) centred near (x, z). Returns it, or undefined if blocked. */
+  addFeature(def: FeatureDef, x: number, z: number): SimFeature | undefined {
+    const [cx, cz] = this.terrain.footprintCell(x, z, def.footprintX, def.footprintZ);
+    if (def.blocking && this.occupancy.staticBlocked(cx, cz, def.footprintX, def.footprintZ)) return undefined;
+    const [fx, fz] = this.terrain.cellCenter(cx, cz, def.footprintX, def.footprintZ);
+    const f: SimFeature = { id: this.features.length, def, cellX: cx, cellZ: cz, x: fx, y: this.terrain.heightAt(fx, fz), z: fz, alive: true };
+    this.features.push(f);
+    if (def.blocking) this.occupancy.setFeature(cx, cz, def.footprintX, def.footprintZ, f.id);
+    return f;
+  }
+
+  private updateVisibility(): void {
+    for (let p = 0; p < this.players.length; p++) {
+      const viewers = this.unitsInOrder()
+        .filter((u) => u.owner === p && this.isFinished(u) && !u.dying)
+        .map((u) => ({ x: u.x, z: u.z, sight: u.def.sightDistance, radar: u.scripts?.state.activated || !u.def.onOffable ? u.def.radarDistance : 0 }));
+      this.visibility.refresh(p, viewers);
+    }
   }
 
   // --- economy ----------------------------------------------------------------------
@@ -1066,6 +1262,11 @@ export class World {
       mix(p.metal);
       mix(p.energy);
     }
+    for (const p of this.projectiles) {
+      mix(p.x);
+      mix(p.y);
+      mix(p.z);
+    }
     mix(this.features.filter((f) => f.alive).length);
     mix(this.tickCount);
     return (h >>> 0).toString(16);
@@ -1086,6 +1287,19 @@ export function toDirection(rotation: number): [number, number] {
 function turnRadius(def: UnitDef): number {
   const radiansPerTick = angleToRadians(def.turnRate);
   return radiansPerTick > 0 ? def.maxVelocity / radiansPerTick : 0;
+}
+
+/** The highest point of a model in its rest pose, used as the unit's height (RWE findHighestVertex). */
+function modelHeight(model: Piece | undefined): number {
+  if (!model) return 16;
+  let top = 0;
+  const walk = (p: Piece, oy: number) => {
+    const y0 = oy + p.offset[1];
+    for (let i = 1; i < p.vertices.length; i += 3) top = Math.max(top, y0 + p.vertices[i]!);
+    p.children.forEach((c) => walk(c, y0));
+  };
+  walk(model, 0);
+  return Math.max(4, top);
 }
 
 function toSigned(a: number): number {
