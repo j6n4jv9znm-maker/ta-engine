@@ -26,6 +26,7 @@ export interface FeatureDef {
   animTrans: boolean;
   shadTrans: boolean;
   blocking: boolean;
+  indestructible: boolean;
   reclaimable: boolean;
   metal: number;
   energy: number;
@@ -72,6 +73,7 @@ function toDef(name: string, b: TdfBlock): FeatureDef {
     animTrans: n('animtrans') !== 0,
     shadTrans: n('shadtrans') !== 0,
     blocking: n('blocking') !== 0,
+    indestructible: n('indestructible') !== 0,
     reclaimable: n('reclaimable') !== 0,
     metal: n('metal'),
     energy: n('energy'),

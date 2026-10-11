@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TA Sandbox</title>
     <style>
-      :root { color-scheme: dark; --bg: #0d110d; --panel: #151b15; --line: #2a352a; --text: #d6e6d6; --dim: #7f947f; --accent: #8f8; }
+      :root { color-scheme: dark; --bg: #0d110d; --panel: #151b15; --line: #2a352a; --text: #d6e6d6; --dim: #7f947f; --accent: #8f8; --metal: #b9c4cf; --energy: #f2d64b; --bad: #ff6b6b; }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
-      body { display: grid; grid-template-columns: minmax(220px, 260px) 1fr; }
+      body { display: grid; grid-template-columns: minmax(230px, 270px) 1fr; }
       #side { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-right: 1px solid var(--line); height: 100vh; overflow: auto; }
       h1 { font-size: 14px; margin: 0; color: var(--accent); }
       h1 a { color: var(--dim); font-size: 11px; }
@@ -18,9 +18,22 @@
       #minimap { position: absolute; top: 10px; right: 10px; border: 1px solid #000; outline: 1px solid var(--line); cursor: crosshair; image-rendering: pixelated; max-width: 30%; }
       #box { position: absolute; border: 1px solid #8f8; background: rgba(136, 255, 136, 0.08); pointer-events: none; display: none; }
       #hint { position: absolute; bottom: 8px; left: 10px; color: var(--dim); pointer-events: none; text-shadow: 0 0 3px #000; }
+      #resources { position: absolute; top: 8px; left: 10px; display: flex; gap: 18px; background: rgba(10, 14, 10, 0.85); border: 1px solid var(--line); padding: 5px 12px; border-radius: 4px; pointer-events: none; }
+      .res { display: grid; grid-template-columns: auto 140px auto; gap: 6px; align-items: center; }
+      .res .bar { height: 8px; background: #222; border: 1px solid #333; position: relative; }
+      .res .fill { position: absolute; inset: 0 auto 0 0; }
+      .res.metal .fill { background: var(--metal); }
+      .res.energy .fill { background: var(--energy); }
+      .stall { color: var(--bad); }
       button, input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 3px 6px; border-radius: 3px; }
+      button.on { border-color: var(--accent); color: var(--accent); }
       #selInfo { white-space: pre-line; }
       .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+      #build { display: flex; flex-direction: column; gap: 4px; }
+      #buildGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+      #buildGrid button { text-align: left; padding: 4px 5px; line-height: 1.2; position: relative; }
+      #buildGrid button small { display: block; color: var(--dim); }
+      #buildGrid button .count { position: absolute; top: 2px; right: 4px; color: var(--accent); }
     </style>
   </head>
   <body>
@@ -28,21 +41,29 @@
       <h1>TA Sandbox <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
       <div id="status">Loading…</div>
       <label class="row">Map <select id="map"></select></label>
-      <div class="row"><button id="restart">Restart</button> <button id="pause">Pause</button></div>
+      <label class="row">Start with <select id="startWith"><option value="commander">a Commander</option><option value="army">a Commander and an army</option></select></label>
+      <div class="row"><button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button></div>
       <div id="clock" class="dim"></div>
       <div id="selInfo" class="dim">Nothing selected.</div>
+      <div id="commands" class="row"></div>
+      <div id="build"></div>
       <div class="dim">
-        Left-click a unit to select it, or drag a box around several.<br />
-        Shift adds to the selection. Ctrl+A selects everything.<br />
-        Right-click the ground to move there. S stops.<br />
-        Arrow keys or screen edge to scroll, wheel to zoom, middle-drag to pan.
+        Left-click a unit to select it, or drag a box. Shift adds. Ctrl+A selects everything.<br />
+        Right-click: move; on a rock, tree or wreck with builders: reclaim; on a half-built unit: help build.<br />
+        Builders: pick something to build, then left-click the ground (shift to queue more). Right-click or Esc cancels.<br />
+        Factories: click a unit to queue it (shift: 5), right-click to remove. Right-click the ground sets the rally point.<br />
+        S stops. Arrows or screen edge scroll, wheel zooms, middle-drag pans.
       </div>
       <label class="row">or open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
     </aside>
     <main id="view">
       <canvas id="minimap" title="Click to jump"></canvas>
+      <div id="resources">
+        <div class="res metal"><span>Metal</span><div class="bar"><div class="fill" id="mFill"></div></div><span id="mText"></span></div>
+        <div class="res energy"><span>Energy</span><div class="bar"><div class="fill" id="eFill"></div></div><span id="eText"></span></div>
+      </div>
       <div id="box"></div>
-      <div id="hint">Phase 5 sandbox: movement only. No building or fighting yet.</div>
+      <div id="hint">Phase 6 sandbox: build a base and an army. No fighting yet.</div>
     </main>
     <script type="module" src="/src/debug/game.ts"></script>
   </body>

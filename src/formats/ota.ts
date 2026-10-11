@@ -11,6 +11,9 @@ import { getBlock, getValue, type TdfBlock } from './tdf';
 export interface OtaSchema {
   type: string;
   surfaceMetal: number;
+  /** Starting metal and energy (and Commander storage) for human players; RWE's default is 1000. */
+  humanMetal: number;
+  humanEnergy: number;
   features: { name: string; x: number; z: number }[];
   /** Start positions in pixels from the map's top-left, indexed by player (0-based). */
   startPositions: ({ x: number; z: number } | undefined)[];
@@ -58,7 +61,14 @@ export function parseOta(root: TdfBlock): OtaInfo {
       const m = /^startpos(\d+)$/i.exec(str(sp, 'specialwhat'));
       if (m) startPositions[Number(m[1]) - 1] = { x: num(sp, 'XPos'), z: num(sp, 'ZPos') };
     }
-    schemas.push({ type: str(s, 'Type'), surfaceMetal: num(s, 'SurfaceMetal', 3), features, startPositions });
+    schemas.push({
+      type: str(s, 'Type'),
+      surfaceMetal: num(s, 'SurfaceMetal', 3),
+      humanMetal: num(s, 'HumanMetal', 1000),
+      humanEnergy: num(s, 'HumanEnergy', 1000),
+      features,
+      startPositions,
+    });
   }
 
   return {

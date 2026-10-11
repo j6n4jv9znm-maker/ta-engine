@@ -38,6 +38,34 @@ export interface UnitDef {
   /** 1 for mobile units, 0 for buildings. */
   bmCode: number;
   maxDamage: number;
+  // --- economy and construction (per second unless noted; costs in metal/energy, build time in work units)
+  builder: boolean;
+  /** Work done per second when building; per tick it is workerTime / 30, as in RWE. */
+  workerTime: number;
+  buildTime: number;
+  buildCostMetal: number;
+  buildCostEnergy: number;
+  /** How close (world units) a builder must be to work on something. */
+  buildDistance: number;
+  energyMake: number;
+  metalMake: number;
+  energyUse: number;
+  metalUse: number;
+  /** Metal made per second while active and powered (metal makers). */
+  makesMetal: number;
+  /** Multiplier on the metal under the footprint (metal extractors). */
+  extractsMetal: number;
+  /** Energy per second at full wind. */
+  windGenerator: number;
+  tidalGenerator: number;
+  energyStorage: number;
+  metalStorage: number;
+  commander: boolean;
+  activateWhenBuilt: boolean;
+  onOffable: boolean;
+  /** Footprint cells, row by row (TA yardmap letters), or empty when the whole footprint is solid. */
+  yardMap: string;
+  corpse: string;
   /** The class used for pathfinding; units without one use their own footprint and limits. */
   movementClass: MovementClass;
   /** The unit's own limits, used for collision checks (TA ignores the movement class there, per RWE). */
@@ -97,6 +125,27 @@ export function parseUnitDef(fbi: TdfBlock, movementClasses: Map<string, Movemen
     floater: n('floater') !== 0,
     bmCode: n('bmcode'),
     maxDamage: n('maxdamage', 1),
+    builder: n('builder') !== 0,
+    workerTime: n('workertime'),
+    buildTime: Math.max(1, n('buildtime', 1)),
+    buildCostMetal: n('buildcostmetal'),
+    buildCostEnergy: n('buildcostenergy'),
+    buildDistance: n('builddistance', 64),
+    energyMake: n('energymake'),
+    metalMake: n('metalmake'),
+    energyUse: n('energyuse'),
+    metalUse: n('metaluse'),
+    makesMetal: n('makesmetal'),
+    extractsMetal: n('extractsmetal'),
+    windGenerator: n('windgenerator'),
+    tidalGenerator: n('tidalgenerator'),
+    energyStorage: n('energystorage'),
+    metalStorage: n('metalstorage'),
+    commander: n('commander') !== 0,
+    activateWhenBuilt: n('activatewhenbuilt') !== 0,
+    onOffable: n('onoffable') !== 0,
+    yardMap: s('yardmap').replace(/\s+/g, ''),
+    corpse: s('corpse'),
     movementClass: movementClasses.get(mcName) ?? own,
     ownMovement: own,
   };

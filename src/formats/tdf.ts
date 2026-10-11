@@ -28,6 +28,14 @@ export interface TdfWarning {
   message: string;
 }
 
+export interface TdfOptions {
+  /**
+   * Keep blocks whose name repeats, renamed "name#2", "name#3", ... (normally the last one wins).
+   * Some GUI files reuse gadget numbers, and every gadget matters there.
+   */
+  keepDuplicateBlocks?: boolean;
+}
+
 export interface TdfResult {
   root: TdfBlock;
   warnings: TdfWarning[];
@@ -43,13 +51,13 @@ export class TdfError extends Error {
 }
 
 /** Parses TDF text. Returns the top-level blocks plus any recoverable problems found. */
-export function parseTdfWithWarnings(text: string): TdfResult {
-  return new Parser(stripComments(text)).parse();
+export function parseTdfWithWarnings(text: string, options: TdfOptions = {}): TdfResult {
+  return new Parser(stripComments(text), options.keepDuplicateBlocks ?? false).parse();
 }
 
 /** Parses TDF text, ignoring recoverable problems. */
-export function parseTdf(text: string): TdfBlock {
-  return parseTdfWithWarnings(text).root;
+export function parseTdf(text: string, options: TdfOptions = {}): TdfBlock {
+  return parseTdfWithWarnings(text, options).root;
 }
 
 /** Case-insensitive lookup of a nested block, e.g. getBlock(fbi, 'UNITINFO'). */
@@ -97,7 +105,16 @@ class Parser {
   private line = 1;
   private readonly warnings: TdfWarning[] = [];
 
-  constructor(private readonly s: string) {}
+  constructor(
+    private readonly s: string,
+    private readonly keepDuplicates: boolean,
+  ) {}
+
+  private put(target: TdfBlock, name: string, block: TdfBlock): void {
+    let key = name;
+    if (this.keepDuplicates) for (let n = 2; key in target; n++) key = `${name}#${n}`;
+    target[key] = block;
+  }
 
   parse(): TdfResult {
     const root: TdfBlock = {};
@@ -106,7 +123,7 @@ class Parser {
       if (this.eof()) break;
       if (this.peek() === '[') {
         const [name, block] = this.block();
-        root[name] = block;
+        this.put(root, name, block);
       } else if (this.peek() === '}') {
         this.warn('unexpected "}" at top level');
         this.advance();
@@ -141,7 +158,7 @@ class Parser {
       }
       if (c === '[') {
         const [childName, child] = this.block();
-        block[childName] = child;
+        this.put(block, childName, child);
         continue;
       }
       this.property(block);
