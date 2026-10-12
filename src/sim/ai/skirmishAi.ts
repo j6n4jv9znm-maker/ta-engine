@@ -57,6 +57,13 @@ export class SkirmishAi {
   /** Building jobs handed out but not yet started, so two builders don't pick the same spot. */
   private claimed = new Map<number, { x: number; z: number; tick: number }>();
   private hasWater: boolean | undefined;
+  private patches: { x: number; z: number }[] | undefined;
+
+  /** The map's metal patches (they never move), looked up once rather than for every candidate site. */
+  private metalPatches(world: World): { x: number; z: number }[] {
+    this.patches ??= world.features.filter((f) => f.alive && f.def.metal > 0 && !f.def.blocking).map((f) => ({ x: f.x, z: f.z }));
+    return this.patches;
+  }
 
   constructor(
     readonly player: number,
@@ -222,11 +229,11 @@ export class SkirmishAi {
           // Never wall the army in: there must still be a way from the base to the enemy.
           const enemy = this.enemyStarts[0];
           if (enemy && this.armyMovement) {
-            if (++pathChecks > 6) return false; // cramped base: try again next time rather than stall the game
+            if (++pathChecks > 1) return false; // cramped base: try again next time rather than stall the game
             if (!world.pathSurvives(this.armyMovement, base, enemy, d, site.cellX, site.cellZ, 1)) continue;
           }
           // Don't build on metal patches: they're for extractors.
-          if (d.extractsMetal === 0 && world.features.some((f) => f.alive && f.def.metal > 0 && !f.def.blocking && Math.hypot(f.x - site.x, f.z - site.z) < 48)) continue;
+          if (d.extractsMetal === 0 && this.metalPatches(world).some((f) => Math.hypot(f.x - site.x, f.z - site.z) < 48)) continue;
           this.issue(world, { kind: 'build', unitId: b.id, unitName: d.unitName, x: site.x, z: site.z });
           this.claimed.set(b.id, { x: site.x, z: site.z, tick: world.tickCount });
           return true;

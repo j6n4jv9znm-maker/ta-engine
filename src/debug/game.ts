@@ -95,7 +95,9 @@ let menuBuilderId = -1;
 
 // --- Scene ------------------------------------------------------------------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+// Retina screens have 4x the pixels; drawing all of them made the game lag on a MacBook Air, and TA's
+// art is low resolution anyway, so draw at most 1.5x.
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.domElement.className = 'main';
 view.prepend(renderer.domElement);
 const scene = new THREE.Scene();
@@ -107,9 +109,9 @@ scene.add(sun, sun.target);
 // Shadows, as TA draws under every unit: the sun casts them a little down and to the right. The
 // shadow camera follows the view so only what's on screen needs shadow-map space.
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.bias = -0.0015;
 const SUN_DIR = new THREE.Vector3(-0.6, 1, -0.5).normalize();
 function aimSun(): void {

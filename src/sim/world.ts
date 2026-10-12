@@ -189,7 +189,11 @@ const BOMB_RUN_LENGTH = 700;
 
 /** After this many shots in a row are blocked, an attacking unit moves in closer. */
 export const BLOCKED_SHOTS_TO_MOVE = 3;
-const REPLANS_PER_TICK = 20;
+/** How many new paths may be planned in one tick (the rest wait for the next). */
+const PLANS_PER_TICK = 4;
+/** The most cells one path search may expand before handing back the best leg it found. */
+const MAX_PATH_EXPANSIONS = 6000;
+const REPLANS_PER_TICK = 8;
 /** Wind generators make full power at this wind speed (RWE MaxUtilizableWindSpeed). */
 const MAX_USEFUL_WIND = 5000;
 /** How long to wait for a build script to report its stance before working anyway. */
@@ -226,6 +230,7 @@ export class World {
   private nextProjectileId = 1;
   /** Re-plans allowed this tick; units over budget keep their old path a little longer. */
   private replanBudget = 0;
+  private planBudget = 0;
   private orderCache: SimUnit[] | undefined;
   private nextWindChange = 0;
   private nextId = 1;
@@ -455,6 +460,7 @@ export class World {
     for (const c of cmds) this.apply(c);
     for (const ai of this.ais) ai.update(this);
     this.replanBudget = REPLANS_PER_TICK;
+    this.planBudget = PLANS_PER_TICK;
 
     if (this.tickCount % TICKS_PER_SECOND === 0) this.updateEconomy();
     this.updateWind();
@@ -1338,6 +1344,12 @@ export class World {
       (u.inCollision && now - u.path.createdTick >= REPATH_INTERVAL) ||
       (u.path.index >= u.path.waypoints.length && !u.path.complete && now - u.path.createdTick >= REPATH_INTERVAL);
     // Re-plans (not first plans) share a per-tick budget so a big jam can't stall the game.
+    // First plans share a (larger) budget too: a whole army ordered at once plans over a few ticks
+    // instead of stalling one tick (units without a path wait in place meanwhile).
+    if (needPath && !u.path) {
+      if (this.planBudget <= 0) return [u.rotation, 0];
+      this.planBudget--;
+    }
     if (needPath && u.path && this.replanBudget <= 0) return u.path.index < u.path.waypoints.length ? this.seek(u, ...u.path.waypoints[u.path.index]!, Math.hypot(u.path.waypoints[u.path.index]![0] - u.x, u.path.waypoints[u.path.index]![1] - u.z)) : [u.rotation, 0];
     if (needPath) {
       if (u.path) this.replanBudget--;
@@ -1437,6 +1449,9 @@ export class World {
       // Aiming at something solid (a building, a unit's spot)? Aim at the open ground next to it, so the
       // search can finish instead of exploring the whole map.
       goal: nearestOpen(grid, w, this.terrain.height, clampCell(goal)),
+      // Long trips are planned in legs: a search stops after this many cells and the unit re-plans when
+      // it gets to the end of the leg, so one far order never stalls a tick.
+      maxExpansions: MAX_PATH_EXPANSIONS,
     });
     // Boxed in by parked units (a crowd at a rally point)? Then plan through them and let collisions sort it out.
     if (avoidIdle && result.waypoints.length === 0 && !result.complete) return this.planPath(u, tx, tz, false);
