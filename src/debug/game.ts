@@ -728,8 +728,10 @@ function reply(key: UnitSoundKey): void {
 }
 
 /** Where sounds are heard from: the middle of the view, and how wide the view is on the ground. */
-function listener(): { x: number; z: number; halfWidth: number } {
-  return { x: rts.target.x, z: rts.target.z, halfWidth: rts.viewHalfHeight() * rts.aspect };
+function listener(): { x: number; z: number; halfWidth: number; halfDepth: number } {
+  // The view's half height is measured across the screen; on the tilted ground it covers more.
+  const h = rts.viewHalfHeight();
+  return { x: rts.target.x, z: rts.target.z, halfWidth: h * rts.aspect, halfDepth: h / Math.sin(Math.atan(2)) };
 }
 
 // Browsers only allow sound once the player has clicked or pressed a key.
