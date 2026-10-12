@@ -19,7 +19,7 @@ describe.skipIf(!hasGameData())('aircraft (your game files)', () => {
     ({ vfs, close } = await openDataDir(DATA_DIR));
     const defs = await loadUnitDefs(vfs);
     const loader = new UnitAssetLoader(vfs, defs);
-    for (const n of ['armfig', 'armthund', 'armbrawl', 'armca', 'armap', 'armpw', 'corak', 'corveng', 'corshad']) assets.set(n, (await loader.load(n))!);
+    for (const n of ['armham', 'armfig', 'armthund', 'armbrawl', 'armca', 'armap', 'armpw', 'corak', 'corveng', 'corshad']) assets.set(n, (await loader.load(n))!);
     weapons = await loadWeaponDefs(vfs);
     featureDefs = await loadFeatureDefinitions(vfs);
   }, 120_000);
@@ -42,19 +42,33 @@ describe.skipIf(!hasGameData())('aircraft (your game files)', () => {
     expect(fig.y).toBeLessThan(25); // landed (the flat map's ground is at 20)
   });
 
-  it('ground weapons cannot shoot planes; fighters can', () => {
+  it('cannons cannot shoot planes; fighters can', () => {
     const w = world();
     const bomber = w.spawn(assets.get('corshad')!, 1, 600, 600)!;
     w.issue({ kind: 'move', unitIds: [bomber.id], x: 1900, z: 640 });
-    const pw = w.spawn(assets.get('armpw')!, 0, 600, 700)!;
+    const pw = w.spawn(assets.get('armham')!, 0, 600, 700)!; // a plasma cannon
     run(w, 30 * 5);
     expect(w.airborne(bomber)).toBe(true);
     expect(bomber.hp).toBe(bomber.def.maxDamage);
     expect(pw.weapons.every((s) => !s || s.target === undefined)).toBe(true);
     const fig = w.spawn(assets.get('armfig')!, 0, 300, 600)!;
     w.issue({ kind: 'attack', unitIds: [fig.id], targetId: bomber.id });
-    run(w, 30 * 30);
+    for (let t = 0; t < 30 * 30; t++) {
+      // Keep the bomber flying back and forth so it stays in the air.
+      if (t % 150 === 0) w.issue({ kind: 'move', unitIds: [bomber.id], x: t % 300 ? 600 : 1900, z: 640 });
+      w.tick();
+    }
     expect(w.units.has(bomber.id) && !bomber.dying).toBe(false);
+  });
+
+  it('a gunship and a fighter can both attack a ground unit', () => {
+    const w = world();
+    const target = w.spawn(assets.get('corak')!, 1, 1000, 1000)!;
+    const brawl = w.spawn(assets.get('armbrawl')!, 0, 400, 400)!;
+    const fig = w.spawn(assets.get('armfig')!, 0, 400, 600)!;
+    w.issue({ kind: 'attack', unitIds: [brawl.id, fig.id], targetId: target.id });
+    run(w, 30 * 30);
+    expect(w.units.has(target.id) && !target.dying).toBe(false);
   });
 
   it('a bomber makes passes over a ground target and destroys it', () => {
@@ -71,7 +85,7 @@ describe.skipIf(!hasGameData())('aircraft (your game files)', () => {
     const ap = w.spawn(assets.get('armap')!, 0, 800, 800)!;
     w.issue({ kind: 'rally', unitId: ap.id, x: 1200, z: 400 });
     w.issue({ kind: 'factory', unitId: ap.id, unitName: 'ARMFIG', count: 1 });
-    for (let t = 0; t < 30 * 60; t++) {
+    for (let t = 0; t < 30 * 150; t++) {
       w.players[0]!.produce(200, 20); // a rich economy, so the build doesn't stall
       w.tick();
     }

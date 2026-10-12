@@ -192,9 +192,14 @@ function tryFire(world: World, u: SimUnit, slot: WeaponSlot, index: WeaponIndex)
 }
 
 /** The nearest visible enemy in range (ties broken by id, so the choice is deterministic). */
-/** Anti-air weapons only hit aircraft in flight, and other weapons only things on the ground (as in TA). */
+/**
+ * What a weapon may aim at: anti-air weapons only aircraft in flight; cannons and bombs only things on
+ * the ground (their shells can't catch a plane); lasers, guns and missiles both.
+ */
 function canHit(world: World, w: WeaponDef, t: SimUnit): boolean {
-  return w.toAirWeapon === world.airborne(t);
+  const air = world.airborne(t);
+  if (w.toAirWeapon) return air;
+  return !air || (w.kind !== 'ballistic' && w.kind !== 'dropped');
 }
 
 /**
@@ -263,7 +268,11 @@ export function headingAndPitch(u: SimUnit, from: [number, number, number], to: 
 }
 
 /** Advances every projectile one tick. */
+/** Aircraft in flight this tick, for projectile hits (refreshed by updateProjectiles). */
+let airborneUnits: SimUnit[] = [];
+
 export function updateProjectiles(world: World): void {
+  airborneUnits = world.projectiles.length ? world.unitsInOrder().filter((u) => world.airborne(u)) : [];
   for (const p of world.projectiles) {
     if (p.dead) continue;
     if (p.dieTick !== undefined && world.tickCount >= p.dieTick) {
@@ -305,10 +314,10 @@ function collide(world: World, p: Projectile): void {
     }
     return impact(world, p, false);
   }
-  // Anti-air shots hit aircraft they pass close to (aircraft aren't on the ground grid).
-  if (p.weapon.toAirWeapon) {
-    for (const u of world.unitsInOrder()) {
-      if (u.owner === p.owner || u.dying || !world.airborne(u)) continue;
+  // Shots that can hit aircraft hit those they pass close to (aircraft aren't on the ground grid).
+  if (p.weapon.kind !== 'ballistic' && p.weapon.kind !== 'dropped') {
+    for (const u of airborneUnits) {
+      if (u.owner === p.owner || u.dying) continue;
       const reach = Math.max(u.def.footprintX, u.def.footprintZ) * 8 + 4;
       if (Math.abs(u.x - p.x) < reach && Math.abs(u.z - p.z) < reach && Math.abs(u.y + u.height / 2 - p.y) < reach) return impact(world, p, false);
     }
