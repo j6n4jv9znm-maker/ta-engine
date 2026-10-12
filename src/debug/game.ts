@@ -772,14 +772,9 @@ function refreshPanel(): void {
     if (!def) continue;
     const b = document.createElement('button');
     const queued = builder.factory?.queue.filter((q) => q.unitName === name).reduce((s, q) => s + q.count, 0) ?? 0;
-    const notYet = !supported(def);
     const pic = unitPic(name);
     b.innerHTML = `${pic ? `<img src="${pic}" alt="">` : '<span class="nopic"></span>'}<span class="name">${esc(def.name)}</span>${queued ? `<span class="count">${queued}</span>` : ''}`;
-    b.title = notYet
-      ? `${def.name}: ships aren't in the game yet.`
-      : `${def.name}: ${def.description}\n${Math.round(def.buildCostMetal)} metal · ${Math.round(def.buildCostEnergy)} energy · build time ${Math.round(def.buildTime)}`;
-    b.disabled = notYet;
-    if (notYet) b.style.opacity = '0.45';
+    b.title = `${def.name}: ${def.description}\n${Math.round(def.buildCostMetal)} metal · ${Math.round(def.buildCostEnergy)} energy · build time ${Math.round(def.buildTime)}`;
     b.classList.toggle('on', mode.kind === 'place' && mode.unitName === name);
     if (builder.factory) {
       b.addEventListener('click', (e) => game?.world.issue({ kind: 'factory', unitId: builder.id, unitName: name, count: e.shiftKey ? 5 : 1 }));
@@ -859,16 +854,6 @@ function unitPic(name: string): string | undefined {
   return undefined;
 }
 
-/** Ships, and the shipyards that only make them, aren't simulated yet. */
-function supported(def: import('../sim/unitDef').UnitDef): boolean {
-  const ship = (d: import('../sim/unitDef').UnitDef) => !d.canFly && (d.movementClass.minWaterDepth > 0 || d.ownMovement.minWaterDepth > 0);
-  if (ship(def)) return false;
-  if (def.builder && def.bmCode === 0) {
-    const products = (menus.get(def.unitName.toLowerCase()) ?? []).flat().map((n) => assets.get(n.toLowerCase())?.def);
-    if (products.length && products.every((p) => !p || ship(p))) return false;
-  }
-  return true;
-}
 
 function describeTasks(u: SimUnit): string {
   if (!game) return '';

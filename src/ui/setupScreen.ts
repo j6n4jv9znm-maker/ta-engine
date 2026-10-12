@@ -156,7 +156,7 @@ export class SetupScreen {
         o?.description ? escape(o.description) : '',
         `${info.starts.length} start positions${o?.size ? ` · ${escape(o.size)}` : ''}`,
         o ? `Wind ${o.minWindSpeed / 100}–${o.maxWindSpeed / 100} · tidal ${o.tidalStrength}` : '',
-        info.water > 0.35 ? '<span class="warn">Lots of water: ships and aircraft are not in the game yet, so this map plays poorly.</span>' : '',
+        info.water > 0.35 ? 'Lots of water: build a shipyard on the shore for ships.' : '',
         info.starts.length < 2 ? '<span class="warn">Only one start position: no room for an opponent.</span>' : '',
       ];
       this.details.innerHTML = lines.filter(Boolean).join('<br>');

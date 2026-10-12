@@ -51,6 +51,8 @@ export interface WeaponDef {
   waterExplosionArt: string;
   smokeTrail: boolean;
   toAirWeapon: boolean;
+  /** Torpedoes and depth charges: travel through water and only hit things in it. */
+  waterWeapon: boolean;
   /** Sound names (sounds/<name>.wav): on firing, on hitting, on hitting water; soundTrigger plays the start sound once per burst. */
   soundStart: string;
   soundHit: string;
@@ -114,6 +116,7 @@ export function parseWeaponDef(name: string, b: TdfBlock): WeaponDef {
     waterExplosionArt: s('waterexplosionart'),
     smokeTrail: flag('smoketrail'),
     toAirWeapon: flag('toairweapon'),
+    waterWeapon: flag('waterweapon'),
     soundStart: s('soundstart').toLowerCase(),
     soundHit: s('soundhit').toLowerCase(),
     soundWater: s('soundwater').toLowerCase(),

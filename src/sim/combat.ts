@@ -197,6 +197,8 @@ function tryFire(world: World, u: SimUnit, slot: WeaponSlot, index: WeaponIndex)
  * the ground (their shells can't catch a plane); lasers, guns and missiles both.
  */
 function canHit(world: World, w: WeaponDef, t: SimUnit): boolean {
+  if (w.waterWeapon) return world.inWater(t);
+  if (world.submerged(t)) return false;
   const air = world.airborne(t);
   if (w.toAirWeapon) return air;
   return !air || (w.kind !== 'ballistic' && w.kind !== 'dropped');
@@ -303,7 +305,7 @@ function collide(world: World, p: Projectile): void {
     return;
   }
   const ground = terrain.heightAt(p.x, p.z);
-  if (ground < terrain.seaLevel && p.y <= terrain.seaLevel) return impact(world, p, true);
+  if (ground < terrain.seaLevel && p.y <= terrain.seaLevel && !p.weapon.waterWeapon) return impact(world, p, true);
   // Straight shots skim small bumps instead of stopping in the dirt just in front of the target.
   const skim = p.weapon.kind === 'ballistic' ? 0 : GROUND_SKIM;
   if (p.y <= ground - skim) {

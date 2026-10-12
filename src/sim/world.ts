@@ -673,6 +673,16 @@ export class World {
     }
   }
 
+  /** Whether a unit is under water (a submarine): only torpedoes and depth charges reach it. */
+  submerged(u: SimUnit): boolean {
+    return !u.def.floater && !u.def.canFly && !u.def.canHover && u.def.movementClass.minWaterDepth > 0 && u.y + u.height < this.terrain.seaLevel;
+  }
+
+  /** Whether a unit is in water (ships and submarines): what torpedoes can go after. */
+  inWater(u: SimUnit): boolean {
+    return !this.airborne(u) && this.terrain.heightAt(u.x, u.z) < this.terrain.seaLevel;
+  }
+
   /** Whether a unit is in the air (only anti-air weapons can hit it there). */
   airborne(u: SimUnit): boolean {
     return u.def.canFly && u.y - Math.max(this.terrain.heightAt(u.x, u.z), this.terrain.seaLevel) > 12;
