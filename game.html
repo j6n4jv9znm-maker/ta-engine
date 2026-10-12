@@ -59,6 +59,8 @@
       #buildGrid button:disabled img { filter: grayscale(1) brightness(0.5); }
       #setup { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: radial-gradient(circle at 50% 30%, #1b261b, #050805 75%); }
       #setup[hidden] { display: none; }
+      .setup-logo { display: block; margin: 0 auto -6px; height: min(22vh, 190px); image-rendering: pixelated; filter: drop-shadow(0 6px 12px #000); }
+      .setup-cols { background: rgba(6, 8, 6, 0.78); border: 1px solid #3a3f36; padding: 14px; border-radius: 4px; }
       .setup-box { width: min(1100px, 96vw); max-height: 94vh; display: flex; flex-direction: column; gap: 14px; }
       .setup-box h1 { font-size: 30px; letter-spacing: 6px; text-transform: uppercase; text-align: center; color: var(--accent); text-shadow: 0 0 12px rgba(136, 255, 136, 0.35); }
       .setup-box h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 2px; color: var(--dim); margin: 10px 0 6px; }

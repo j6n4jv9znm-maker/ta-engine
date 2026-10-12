@@ -22,6 +22,19 @@ interface LiveExplosion {
   sprite: THREE.Sprite;
   anim: Anim;
   start: number;
+  /** Size multiplier, and how fast it drifts upwards (world units a second): for smoke. */
+  scale: number;
+  rise: number;
+  fps: number;
+}
+
+/** A wreck still burning: puffs of smoke rise from it until `until` (ms). */
+interface Burner {
+  x: number;
+  y: number;
+  z: number;
+  until: number;
+  next: number;
 }
 
 interface Debris {
@@ -45,6 +58,9 @@ export class CombatRenderer {
   private readonly loaded = new Map<string, Anim | undefined>();
   private gafs = new Map<string, Promise<ReturnType<typeof parseGaf> | undefined>>();
   private explosions: LiveExplosion[] = [];
+  private burners: Burner[] = [];
+  /** When each smoking missile (by projectile id) or moving ship (by unit id) last left a puff. */
+  private lastPuff = new Map<string, number>();
   private debris: Debris[] = [];
   private lastTick = -1;
 
@@ -67,9 +83,15 @@ export class CombatRenderer {
     for (const e of world.events) {
       if (e.tick <= this.lastTick) continue;
       if (e.kind === 'explosion' && world.visibility.at(viewer, e.x, e.z) & 1) this.spawnExplosion(e.gaf || 'fx', e.art || 'explode3', e.x, e.y, e.z);
+      // A destroyed unit's wreck smokes for a while, as in TA.
+      if (e.kind === 'death' && world.visibility.at(viewer, e.x, e.z) & 1) {
+        const now = performance.now();
+        this.burners.push({ x: e.x, y: e.y, z: e.z, until: now + 7000, next: now });
+      }
       if (e.kind === 'debris' && !(e.flags & BITMAPONLY)) this.spawnDebris(units, e.unitId, e.piece, e.flags);
     }
     this.lastTick = world.tickCount - 1;
+    this.trails(world, viewer);
     this.animate(dt);
   }
 
@@ -105,7 +127,37 @@ export class CombatRenderer {
     (this.shotGeo.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
   }
 
-  private spawnExplosion(gaf: string, art: string, x: number, y: number, z: number): void {
+  /** Smoke behind missiles that trail it, smoke from burning wrecks, and wakes behind moving ships. */
+  private trails(world: World, viewer: number): void {
+    const now = performance.now();
+    const due = (key: string, every: number) => {
+      if (now - (this.lastPuff.get(key) ?? 0) < every) return false;
+      this.lastPuff.set(key, now);
+      return true;
+    };
+    for (const p of world.projectiles) {
+      if (!p.weapon.smokeTrail || !(world.visibility.at(viewer, p.x, p.z) & 1)) continue;
+      if (due(`p${p.id}`, 45)) this.spawnExplosion('fx', 'smoke 1', p.x, p.y, p.z, { scale: 0.7, rise: 6, fps: 20 });
+    }
+    this.burners = this.burners.filter((b) => {
+      if (now >= b.next) {
+        b.next = now + 260 + Math.random() * 200;
+        this.spawnExplosion('fx', 'smoke 2', b.x + (Math.random() - 0.5) * 12, b.y + 4, b.z + (Math.random() - 0.5) * 12, { scale: 1, rise: 22, fps: 9 });
+      }
+      return now < b.until;
+    });
+    for (const u of world.units.values()) {
+      if (u.dying || u.speed < 0.6 || u.def.canFly || u.def.movementClass.minWaterDepth <= 0 || !(world.visibility.at(viewer, u.x, u.z) & 1)) continue;
+      if (u.y > world.terrain.seaLevel + 1 || !due(`u${u.id}`, 140)) continue;
+      // A little splash just behind the ship.
+      const a = (u.rotation / 65536) * Math.PI * 2;
+      const back = Math.max(u.def.footprintX, u.def.footprintZ) * 7;
+      this.spawnExplosion('fx', 'H2o', u.x - Math.sin(a) * back, world.terrain.seaLevel, u.z - Math.cos(a) * back, { scale: 0.45, rise: 0, fps: 18 });
+    }
+    if (this.lastPuff.size > 4000) this.lastPuff.clear();
+  }
+
+  private spawnExplosion(gaf: string, art: string, x: number, y: number, z: number, opts: { scale?: number; rise?: number; fps?: number } = {}): void {
     const key = `${gaf}/${art}`.toLowerCase();
     const ready = this.loaded.get(key);
     const make = (anim: Anim | undefined) => {
@@ -116,7 +168,7 @@ export class CombatRenderer {
       sprite.scale.set(anim.frames[0]!.w, anim.frames[0]!.h, 1);
       sprite.renderOrder = 5;
       this.group.add(sprite);
-      this.explosions.push({ sprite, anim, start: performance.now() });
+      this.explosions.push({ sprite, anim, start: performance.now(), scale: opts.scale ?? 1, rise: opts.rise ?? 0, fps: opts.fps ?? EXPLOSION_FPS });
     };
     if (ready !== undefined || this.loaded.has(key)) make(ready);
     else void this.anim(gaf, art).then(make);
@@ -143,7 +195,7 @@ export class CombatRenderer {
   private animate(dt: number): void {
     const now = performance.now();
     this.explosions = this.explosions.filter((e) => {
-      const i = Math.floor(((now - e.start) / 1000) * EXPLOSION_FPS);
+      const i = Math.floor(((now - e.start) / 1000) * e.fps);
       const f = e.anim.frames[i];
       if (!f) {
         this.group.remove(e.sprite);
@@ -151,7 +203,8 @@ export class CombatRenderer {
         return false;
       }
       e.sprite.material.map = f.tex;
-      e.sprite.scale.set(f.w, f.h, 1);
+      e.sprite.scale.set(f.w * e.scale, f.h * e.scale, 1);
+      e.sprite.position.y += e.rise * dt;
       return true;
     });
     for (const d of this.debris) {
