@@ -639,9 +639,56 @@ canvas.addEventListener('contextmenu', (e) => {
   showMoveMarker(hit);
 });
 
+// --- Cheats: Enter opens TA's chat line ---------------------------------------------------
+const chatEl = $<HTMLInputElement>('chat');
+const noteEl = $('note');
+const CHEAT_NAMES: Record<string, string> = {
+  atm: 'ATM: metal and energy filled (and +10,000 storage)',
+  nocost: 'NOCOST: free, instant building',
+  nowisee: 'NOWISEE: whole map visible',
+  los: 'LOS: whole map visible',
+  doubleshot: 'DOUBLESHOT: double damage',
+  halfshot: 'HALFSHOT: half damage',
+};
+let noteTimer: number | undefined;
+function note(text: string): void {
+  noteEl.textContent = text;
+  noteEl.hidden = false;
+  clearTimeout(noteTimer);
+  noteTimer = window.setTimeout(() => (noteEl.hidden = true), 4000);
+}
+chatEl.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Escape') {
+    chatEl.hidden = true;
+    chatEl.blur();
+  } else if (e.key === 'Enter') {
+    const code = chatEl.value.trim().replace(/^\+/, '').toLowerCase();
+    chatEl.value = '';
+    chatEl.hidden = true;
+    chatEl.blur();
+    if (!code || !game) return;
+    const name = CHEAT_NAMES[code];
+    if (!name) {
+      note(`Unknown cheat. Try: ${Object.keys(CHEAT_NAMES).map((c) => '+' + c).join(', ')}`);
+      return;
+    }
+    game.world.issue({ kind: 'cheat', player: ME, code });
+    const toggles = code !== 'atm';
+    const on = toggles ? !game.world.cheat(ME, code === 'los' ? 'nowisee' : code) : true;
+    note(`Cheat ${name}${toggles ? (on ? ' (on)' : ' (off)') : ''}`);
+  }
+});
+
 window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'SELECT') return;
   if (!game) return;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    chatEl.hidden = false;
+    chatEl.focus();
+    return;
+  }
   const k = e.key.toLowerCase();
   if (k === 's' && selected.size && !(e.ctrlKey || e.metaKey)) game.world.issue({ kind: 'stop', unitIds: [...selected] });
   // Ctrl+D: self-destruct (again to cancel), as in TA. The way to get rid of your own buildings.
