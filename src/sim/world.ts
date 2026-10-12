@@ -1473,7 +1473,10 @@ export class World {
 
   private groundY(def: UnitDef, x: number, z: number): number {
     const ground = this.terrain.heightAt(x, z);
-    return def.floater || def.canHover ? Math.max(ground, this.terrain.seaLevel) : ground;
+    // Floating buildings (shipyards and the like) sit on the surface even when their files don't say
+    // "floater", or they'd be built (and drawn) at the bottom of the sea.
+    const floats = def.floater || def.canHover || (def.bmCode === 0 && def.ownMovement.minWaterDepth > 0);
+    return floats ? Math.max(ground, this.terrain.seaLevel) : ground;
   }
 
   /** A short fingerprint of the game state, for checking determinism. */
