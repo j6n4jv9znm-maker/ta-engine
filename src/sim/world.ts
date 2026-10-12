@@ -41,7 +41,11 @@ import { rotateYXZ, UnitScripts } from './unitScripts';
  */
 
 export type Task =
-  | { kind: 'move'; x: number; z: number; started?: boolean }
+  /**
+   * `speed`: a cap so a group arrives together (its slowest unit's speed). `fight`: attack enemies met
+   * on the way, then carry on (attack-move).
+   */
+  | { kind: 'move'; x: number; z: number; started?: boolean; speed?: number; fight?: boolean }
   | { kind: 'build'; unitName: string; x: number; z: number; targetId?: number; started?: boolean; waited?: number }
   | { kind: 'assist'; unitId: number; started?: boolean; waited?: number }
   | { kind: 'reclaim'; featureId: number; progress: number; started?: boolean; waited?: number }
@@ -49,7 +53,7 @@ export type Task =
   | { kind: 'attack'; targetId: number; started?: boolean; auto?: boolean };
 
 export type Command =
-  | { kind: 'move'; unitIds: number[]; x: number; z: number; queue?: boolean }
+  | { kind: 'move'; unitIds: number[]; x: number; z: number; queue?: boolean; fight?: boolean }
   | { kind: 'stop'; unitIds: number[] }
   /** One of TA's chat cheats (e.g. "+atm"), for `player`; see CHEATS. Toggles where TA's do. */
   | { kind: 'cheat'; player: number; code: string }
@@ -516,17 +520,37 @@ export class World {
         const movers = this.ownUnits(c.unitIds).filter((u) => this.canWalk(u));
         // Factories take a move order as their rally point.
         for (const f of this.ownUnits(c.unitIds)) if (f.factory) f.rally = [c.x, c.z];
-        // Keep the group's shape, squeezed so it doesn't sprawl.
+        // Keep the group's shape, squeezed so it doesn't sprawl; a group bunched on one spot (aircraft
+        // off the same pad) spreads into a block instead of piling onto one point.
         const cx = movers.reduce((s, u) => s + u.x, 0) / Math.max(1, movers.length);
         const cz = movers.reduce((s, u) => s + u.z, 0) / Math.max(1, movers.length);
         const maxR = movers.reduce((m, u) => Math.max(m, Math.hypot(u.x - cx, u.z - cz)), 0);
         const allowed = 24 * Math.sqrt(movers.length);
         const k = maxR > allowed ? allowed / maxR : 1;
-        for (const u of movers) {
-          const x = clamp(c.x + (u.x - cx) * k, 0, this.map.widthUnits);
-          const z = clamp(c.z + (u.z - cz) * k, 0, this.map.heightUnits);
-          this.giveTask(u, { kind: 'move', x, z }, c.queue);
-        }
+        const bunched = movers.length > 1 && maxR < 8 * movers.length;
+        const cols = Math.ceil(Math.sqrt(movers.length));
+        // A group goes at its slowest member's pace so it arrives together (TA moves groups this way).
+        // (Aircraft and ground units keep their own paces: planes don't crawl along with tanks.)
+        const pace = (air: boolean) => {
+          const v = movers.filter((m) => m.def.canFly === air).map((m) => m.def.maxVelocity);
+          return v.length > 1 ? Math.min(...v) : undefined;
+        };
+        const paces = { air: pace(true), ground: pace(false) };
+        const taken: [number, number][] = [];
+        movers.forEach((u, i) => {
+          const gx = bunched ? ((i % cols) - (cols - 1) / 2) * 40 : (u.x - cx) * k;
+          const gz = bunched ? (Math.floor(i / cols) - (cols - 1) / 2) * 40 : (u.z - cz) * k;
+          let x = clamp(c.x + gx, 0, this.map.widthUnits);
+          let z = clamp(c.z + gz, 0, this.map.heightUnits);
+          // Units that started on the same spot (planes off one pad) get their own spots, spiralling out.
+          for (let n = 1; taken.some(([tx, tz]) => Math.hypot(tx - x, tz - z) < 24) && n < 40; n++) {
+            const a = n * 2.4;
+            x = clamp(c.x + gx + Math.cos(a) * 20 * Math.sqrt(n), 0, this.map.widthUnits);
+            z = clamp(c.z + gz + Math.sin(a) * 20 * Math.sqrt(n), 0, this.map.heightUnits);
+          }
+          taken.push([x, z]);
+          this.giveTask(u, { kind: 'move', x, z, speed: u.def.canFly ? paces.air : paces.ground, fight: c.fight }, c.queue);
+        });
         return;
       }
       case 'build': {
@@ -693,7 +717,7 @@ export class World {
         u.order = undefined;
       } else {
         const braking = (u.speed * u.speed) / (2 * Math.max(0.05, u.def.brakeRate));
-        targetSpeed = dist > braking ? u.def.maxVelocity : 0;
+        targetSpeed = dist > braking ? this.speedCap(u) : 0;
         // Don't race off at full speed while still facing the wrong way.
         const [fx, fz] = toDirection(u.rotation);
         const facing = (fx * (order.x - u.x) + fz * (order.z - u.z)) / Math.max(1e-6, dist);
@@ -730,6 +754,30 @@ export class World {
   /** Whether a unit is in the air (only anti-air weapons can hit it there). */
   airborne(u: SimUnit): boolean {
     return u.def.canFly && u.y - Math.max(this.terrain.heightAt(u.x, u.z), this.terrain.seaLevel) > 12;
+  }
+
+  /** The nearest visible enemy within this unit's sight (or weapon reach, if longer), for attack-move. */
+  private nearestFoe(u: SimUnit): SimUnit | undefined {
+    const slots = u.weapons.filter((w): w is WeaponSlot => !!w && !w.def.commandFire);
+    if (!slots.length) return undefined;
+    const reach = Math.max(u.def.sightDistance, ...slots.map((w) => w.def.range));
+    let best: SimUnit | undefined;
+    let bestD = Infinity;
+    for (const o of this.unitsInOrder()) {
+      if (o.owner === u.owner || o.dying || !this.canSee(u.owner, o)) continue;
+      const d = Math.hypot(o.x - u.x, o.z - u.z);
+      if (d <= reach && d < bestD) {
+        best = o;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  /** How fast this unit may go right now: its top speed, or its group's pace on a group move. */
+  private speedCap(u: SimUnit): number {
+    const t = u.tasks[0];
+    return t?.kind === 'move' && t.speed !== undefined ? Math.min(u.def.maxVelocity, t.speed) : u.def.maxVelocity;
   }
 
   /**
@@ -769,6 +817,15 @@ export class World {
     if (!t) return;
     switch (t.kind) {
       case 'move':
+        // Attack-move: stop to fight anything hostile in sight, then carry on.
+        if (t.fight && (this.tickCount + u.id) % 15 === 0) {
+          const foe = this.nearestFoe(u);
+          if (foe) {
+            t.started = false;
+            u.tasks.unshift({ kind: 'attack', targetId: foe.id, auto: true });
+            return;
+          }
+        }
         if (!t.started) {
           t.started = true;
           this.driveTo(u, t.x, t.z);
@@ -1090,8 +1147,17 @@ export class World {
    * way), then on to the rally point if one is set. RWE gives it a "bugger off" order instead.
    */
   private release(factory: SimUnit, unit: SimUnit): void {
-    const [fx, fz] = toDirection(factory.rotation);
     const out = (Math.max(factory.def.footprintX, factory.def.footprintZ) * CELL_SIZE) / 2 + Math.max(unit.def.footprintX, unit.def.footprintZ) * CELL_SIZE;
+    // Leave through the front, unless that's ground the unit can't use (a shipyard built facing the
+    // shore): then whichever side can be used.
+    const mc = unit.def.movementClass;
+    const usable = (rot: number) => {
+      const [dx, dz] = toDirection(rot);
+      const [cx, cz] = this.terrain.footprintCell(factory.x + dx * out, factory.z + dz * out, unit.def.footprintX, unit.def.footprintZ);
+      return unit.def.canFly || this.terrain.fits(mc, cx, cz);
+    };
+    const exitRot = [0, 16384, 32768, 49152].map((r) => (factory.rotation + r) & 0xffff).find(usable) ?? factory.rotation;
+    const [fx, fz] = toDirection(exitRot);
     const ex = factory.x + fx * out;
     const ez = factory.z + fz * out;
     // Re-snap the unit's occupied cells to where it actually is now.
@@ -1107,7 +1173,7 @@ export class World {
     }
     if (!this.canWalk(unit)) return;
     unit.exitFactory = factory.id;
-    unit.rotation = factory.rotation;
+    unit.rotation = exitRot;
     // Drive straight to the exit without path planning (the planner can't see a way out of the walls).
     unit.tasks.push({ kind: 'move', x: ex, z: ez, started: true });
     unit.order = { x: ex, z: ez };
@@ -1405,7 +1471,7 @@ export class World {
     const [fx, fz] = toDirection(u.rotation);
     let factor = Math.max(0, dist > 0 ? (fx * (wx - u.x) + fz * (wz - u.z)) / dist : 0);
     if (dist <= turnRadius(u.def)) factor *= factor; // discourage orbiting the waypoint
-    return [heading, u.def.maxVelocity * factor];
+    return [heading, this.speedCap(u) * factor];
   }
 
   private arrive(u: SimUnit, wx: number, wz: number, dist: number): [number, number] {
@@ -1542,7 +1608,9 @@ export class World {
         else if (o) this.makeWay(o, u);
         return false;
       }
-      if (!this.terrain.fits(def.movementClass, cx, cz)) return false;
+      // Ground it can't use stops it, unless it is already stuck on such ground (a boat pushed against the
+      // shore, a unit dropped on a slope): then let it move, so it can get itself free.
+      if (!this.terrain.fits(def.movementClass, cx, cz) && this.terrain.fits(def.movementClass, u.cellX, u.cellZ)) return false;
       this.occupancy.clearUnit(u.cellX, u.cellZ, def.footprintX, def.footprintZ, u.id);
       this.occupancy.setUnit(cx, cz, def.footprintX, def.footprintZ, u.id);
       u.cellX = cx;

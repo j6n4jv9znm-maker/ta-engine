@@ -88,7 +88,7 @@ let missionOutcome: 'won' | 'lost' | undefined;
 let speed = 1;
 
 /** What a left-click does right now. */
-type Mode = { kind: 'select' } | { kind: 'place'; unitName: string } | { kind: 'reclaim' };
+type Mode = { kind: 'select' } | { kind: 'place'; unitName: string } | { kind: 'reclaim' } | { kind: 'fight' };
 let mode: Mode = { kind: 'select' };
 let menuPage = 0;
 let menuBuilderId = -1;
@@ -568,6 +568,10 @@ window.addEventListener('mouseup', (e) => {
     if (!e.shiftKey) setMode({ kind: 'select' });
     return;
   }
+  if (mode.kind === 'fight') {
+    fightMoveTo(p, e.shiftKey);
+    return;
+  }
   if (mode.kind === 'reclaim') {
     const f = featureAt(p);
     if (f) {
@@ -608,6 +612,10 @@ window.addEventListener('mouseup', (e) => {
 canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   if (!game) return;
+  if (mode.kind === 'fight') {
+    fightMoveTo(localPoint(e), e.shiftKey);
+    return;
+  }
   if (mode.kind !== 'select') {
     setMode({ kind: 'select' });
     return;
@@ -696,6 +704,13 @@ window.addEventListener('keydown', (e) => {
   }
   const k = e.key.toLowerCase();
   if (k === 's' && selected.size && !(e.ctrlKey || e.metaKey)) game.world.issue({ kind: 'stop', unitIds: [...selected] });
+  if (/^[1-9]$/.test(e.key) && !e.altKey) {
+    e.preventDefault();
+    useGroup(Number(e.key), e.ctrlKey || e.metaKey);
+    return;
+  }
+  // A, then click: attack-move (the units fight anything they meet on the way).
+  if (k === 'a' && !(e.ctrlKey || e.metaKey) && selected.size) setMode({ kind: 'fight' });
   // Ctrl+C: select your Commander and look at it, as in TA.
   if (k === 'c' && (e.ctrlKey || e.metaKey) && !window.getSelection()?.toString()) {
     const com = [...game.world.units.values()].find((u) => u.owner === ME && u.def.commander && !u.dying);
@@ -736,6 +751,46 @@ window.addEventListener('keydown', (e) => {
     }
   }
 });
+
+/** Attack-move: the selection heads for the spot and fights whatever it meets on the way. */
+function fightMoveTo(p: { x: number; y: number }, queue: boolean): void {
+  const hit = groundAt(p);
+  if (game && hit && selected.size) {
+    game.world.issue({ kind: 'move', unitIds: [...selected], x: hit.x, z: hit.z, queue, fight: true });
+    showMoveMarker(hit);
+    reply('ok1');
+  }
+  if (!queue) setMode({ kind: 'select' });
+}
+
+// Control groups, as in TA: Ctrl+1-9 makes the selection group N; 1-9 selects it again, and pressing the
+// same number twice quickly jumps the view to it.
+const groups = new Map<number, number[]>();
+let lastGroupKey = { n: -1, at: 0 };
+function useGroup(n: number, assign: boolean): void {
+  if (!game) return;
+  if (assign) {
+    groups.set(n, [...selected]);
+    note(`Group ${n}: ${selected.size} unit${selected.size === 1 ? '' : 's'}`);
+    return;
+  }
+  const ids = (groups.get(n) ?? []).filter((id) => {
+    const u = game!.world.units.get(id);
+    return !!u && !u.dying;
+  });
+  if (!ids.length) return;
+  selected.clear();
+  for (const id of ids) selected.add(id);
+  const now = performance.now();
+  if (lastGroupKey.n === n && now - lastGroupKey.at < 400) {
+    const us = ids.map((id) => game!.world.units.get(id)!);
+    rts.lookAt(us.reduce((a, u) => a + u.x, 0) / us.length, us.reduce((a, u) => a + u.z, 0) / us.length);
+  }
+  lastGroupKey = { n, at: now };
+  panelKey = '';
+  refreshPanel();
+  reply('select1');
+}
 
 /** The first selected unit answers with one of its sounds (TA plays one reply per order, not one per unit). */
 function reply(key: UnitSoundKey): void {
