@@ -147,13 +147,26 @@ describe('combat', () => {
       weapons: WEAPONS,
       featureDefs: FEATURES,
     });
-    const tank = w.spawn(TANK, 0, 200, 296);
-    const target = w.spawn(DUMMY, 1, 470, 296);
+    const tank = w.spawn(TANK, 0, 200, 296)!;
+    const target = w.spawn(DUMMY, 1, 470, 296)!;
     w.issue({ kind: 'attack', unitIds: [tank.id], targetId: target.id });
     run(w, 30 * 3);
     expect(tank.blockedShots).toBeGreaterThan(0);
     run(w, 30 * 30);
     expect(alive(w, target)).toBe(false);
+  });
+
+  it('an idle unit goes after an enemy it can see but cannot reach yet', () => {
+    const w = newWorld();
+    const tank = w.spawn(TANK, 0, 200, 300)!;
+    const target = w.spawn(DUMMY, 1, 560, 300)!; // 360 away: in sight (400), out of laser range (300)
+    run(w, 30 * 20);
+    expect(alive(w, target)).toBe(false);
+    expect(tank.x).toBeGreaterThan(220);
+  });
+
+  it('weapons without a tolerance get a small default one, so they can fire on the move', () => {
+    expect(testWeapon('PLAIN', 'range=100;').tolerance).toBe(256);
   });
 
   it('is deterministic', () => {

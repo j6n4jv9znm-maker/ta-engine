@@ -43,3 +43,8 @@ export async function openAppVfs(): Promise<Vfs | undefined> {
   if (list.length === 0) return undefined;
   return Vfs.fromSources(list.map((a) => new AppArchiveSource(a.name, a.size)));
 }
+
+/** Writes a line to the app's log file (in the app's settings folder), with the time. */
+export function appLog(line: string): void {
+  void invoke('app_log', { line: `${new Date().toISOString()} ${line}` }).catch(() => undefined);
+}

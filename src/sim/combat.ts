@@ -75,6 +75,9 @@ export type CombatEvent =
   /** A unit script blew a piece off (explode); `flags` are TA's explode types (SHATTER, FALL, ...). */
   | { tick: number; kind: 'debris'; unitId: number; piece: string; flags: number };
 
+/** How far (world units) a straight shot may dip into the ground before it counts as hitting it. */
+const GROUND_SKIM = 6;
+
 export function makeWeaponSlots(world: World, u: SimUnit): (WeaponSlot | undefined)[] {
   return u.def.weapons.map((name) => {
     const def = name ? world.weaponDefs.get(name) : undefined;
@@ -260,7 +263,9 @@ function collide(world: World, p: Projectile): void {
   }
   const ground = terrain.heightAt(p.x, p.z);
   if (ground < terrain.seaLevel && p.y <= terrain.seaLevel) return impact(world, p, true);
-  if (p.y <= ground) {
+  // Straight shots skim small bumps instead of stopping in the dirt just in front of the target.
+  const skim = p.weapon.kind === 'ballistic' ? 0 : GROUND_SKIM;
+  if (p.y <= ground - skim) {
     if (p.weapon.groundBounce) {
       p.vy = 0;
       p.y = p.prevY;

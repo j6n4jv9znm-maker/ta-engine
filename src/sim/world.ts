@@ -45,7 +45,8 @@ export type Task =
   | { kind: 'build'; unitName: string; x: number; z: number; targetId?: number; started?: boolean; waited?: number }
   | { kind: 'assist'; unitId: number; started?: boolean; waited?: number }
   | { kind: 'reclaim'; featureId: number; progress: number; started?: boolean; waited?: number }
-  | { kind: 'attack'; targetId: number; started?: boolean };
+  /** `auto`: the unit picked this fight itself; it gives up once the target is out of sight. */
+  | { kind: 'attack'; targetId: number; started?: boolean; auto?: boolean };
 
 export type Command =
   | { kind: 'move'; unitIds: number[]; x: number; z: number; queue?: boolean }
@@ -568,7 +569,10 @@ export class World {
     u.nanoTarget = undefined;
     if (this.isFinished(u)) {
       if (u.factory) this.updateFactory(u);
-      else this.runTask(u);
+      else {
+        if (u.tasks.length === 0) this.engage(u);
+        this.runTask(u);
+      }
       const t = u.tasks[0];
       updateWeapons(this, u, t?.kind === 'attack' ? t.targetId : undefined);
     }
@@ -601,6 +605,36 @@ export class World {
     u.scripts?.tick();
   }
 
+  /**
+   * An idle armed unit goes after enemies it can see (like TA's "maneuver"): one in sight but out of
+   * range, or the one it's shooting at when its shots keep getting blocked. Builders and Commanders
+   * stay put. Checked about once a second per unit.
+   */
+  private engage(u: SimUnit): void {
+    if ((this.tickCount + u.id) % TICKS_PER_SECOND !== 0) return;
+    if (u.def.builder || u.def.commander || !this.canWalk(u)) return;
+    const slots = u.weapons.filter((w): w is WeaponSlot => !!w && !w.def.commandFire);
+    if (!slots.length) return;
+    const range = Math.max(...slots.map((w) => w.def.range));
+    const current = slots.map((w) => (w.target !== undefined ? this.units.get(w.target) : undefined)).find((t) => t && !t.dying);
+    if (current) {
+      if (u.blockedShots >= BLOCKED_SHOTS_TO_MOVE) u.tasks.push({ kind: 'attack', targetId: current.id, auto: true });
+      return;
+    }
+    const reach = Math.max(range + 200, u.def.sightDistance);
+    let best: SimUnit | undefined;
+    let bestD = Infinity;
+    for (const o of this.unitsInOrder()) {
+      if (o.owner === u.owner || o.dying || !this.canSee(u.owner, o)) continue;
+      const d = Math.hypot(o.x - u.x, o.z - u.z);
+      if (d <= reach && d < bestD) {
+        best = o;
+        bestD = d;
+      }
+    }
+    if (best) u.tasks.push({ kind: 'attack', targetId: best.id, auto: true });
+  }
+
   // --- tasks -------------------------------------------------------------------------
 
   private runTask(u: SimUnit): void {
@@ -629,7 +663,7 @@ export class World {
         return;
       case 'attack': {
         const target = this.units.get(t.targetId);
-        if (!target || target.dying) return this.finishTask(u);
+        if (!target || target.dying || (t.auto && !this.canSee(u.owner, target))) return this.finishTask(u);
         // Close in until the shortest-ranged weapon reaches, then hold position and shoot. If shots keep
         // hitting rocks, trees or hills on the way, move in much closer to get a clear shot.
         const range = Math.min(...u.weapons.filter((w): w is WeaponSlot => !!w && !w.def.commandFire).map((w) => w.def.range));

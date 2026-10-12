@@ -32,7 +32,7 @@ import { EXPLORED, RADAR, SEEN, VIS_TILE } from '../sim/visibility';
 import { loadWeaponDefs, type WeaponDef } from '../sim/weaponDef';
 import { World, type SimFeature, type SimUnit, type UnitAssets } from '../sim/world';
 import type { Vfs } from '../vfs';
-import { appDataDir, chooseAppDataDir, inApp, openAppVfs } from '../io/appData';
+import { appDataDir, appLog, chooseAppDataDir, inApp, openAppVfs } from '../io/appData';
 import { openDevServerVfs, openPickedVfs } from './devData';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -1045,6 +1045,11 @@ async function boot(): Promise<void> {
     void load(openDevServerVfs, 'No data/ folder found. Pick your TA folder instead.');
     return;
   }
+  // Keep a log of status messages and errors, for looking into problems later.
+  appLog('started');
+  new MutationObserver(() => appLog(`status: ${statusEl.textContent}`)).observe(statusEl, { childList: true, characterData: true, subtree: true });
+  window.addEventListener('error', (e) => appLog(`error: ${e.message} at ${e.filename}:${e.lineno}`));
+  window.addEventListener('unhandledrejection', (e) => appLog(`error: ${String(e.reason)}`));
   if (await appDataDir()) {
     void load(openAppVfs, 'Your Total Annihilation folder has no game files any more.');
     return;
