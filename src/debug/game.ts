@@ -397,6 +397,17 @@ function drawOverlay(): void {
   if (!game) return;
   for (const u of game.world.units.values()) {
     if (u.dying || !game.world.isFinished(u)) continue;
+    // Self-destruct countdown above the unit, as in TA.
+    if (u.selfDestructAt !== undefined && u.owner === ME) {
+      const c = screenPos(u.x, u.y + u.height + 20, u.z);
+      const left = Math.max(0, Math.ceil((u.selfDestructAt - game.world.tickCount) / 30));
+      g.font = 'bold 18px ui-monospace, Menlo, monospace';
+      g.textAlign = 'center';
+      g.fillStyle = '#000';
+      g.fillText(String(left), c.x + 1, c.y + 1);
+      g.fillStyle = '#ff5a3c';
+      g.fillText(String(left), c.x, c.y);
+    }
     const damaged = u.hp < u.def.maxDamage;
     if (!damaged && !selected.has(u.id)) continue;
     if (u.owner !== ME && !(game.world.visibility.at(ME, u.x, u.z) & SEEN)) continue;
@@ -632,7 +643,12 @@ window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'SELECT') return;
   if (!game) return;
   const k = e.key.toLowerCase();
-  if (k === 's' && selected.size) game.world.issue({ kind: 'stop', unitIds: [...selected] });
+  if (k === 's' && selected.size && !(e.ctrlKey || e.metaKey)) game.world.issue({ kind: 'stop', unitIds: [...selected] });
+  // Ctrl+D: self-destruct (again to cancel), as in TA. The way to get rid of your own buildings.
+  if (k === 'd' && (e.ctrlKey || e.metaKey) && selected.size) {
+    e.preventDefault();
+    game.world.issue({ kind: 'selfDestruct', unitIds: [...selected] });
+  }
   if (e.key === ' ') {
     // Space: look at the selected units, or at your Commander when nothing is selected.
     e.preventDefault();

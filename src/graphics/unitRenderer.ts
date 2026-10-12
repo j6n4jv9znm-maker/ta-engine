@@ -168,19 +168,21 @@ export class UnitRenderer {
       if (!u.nanoTarget || this.nano.length >= MAX_NANO_PARTICLES) continue;
       const d = this.drawn.get(u.id);
       if (!d || !d.holder.visible) continue;
-      const piece = u.nanoPiece ? d.model.pieces.get(u.nanoPiece.toLowerCase()) : undefined;
-      if (piece) {
-        d.holder.updateWorldMatrix(true, true);
-        piece.getWorldPosition(from);
-      } else {
-        from.set(u.x, u.y + 16, u.z);
+      // One stream from each nozzle (factories have several, spraying from all sides).
+      const nozzles: THREE.Vector3[] = [];
+      d.holder.updateWorldMatrix(true, true);
+      for (const name of u.nanoPieces ?? []) {
+        const piece = d.model.pieces.get(name.toLowerCase());
+        if (piece) nozzles.push(piece.getWorldPosition(new THREE.Vector3()));
       }
+      if (nozzles.length === 0) nozzles.push(from.set(u.x, u.y + 16, u.z).clone());
       const t = u.nanoTarget;
       const target = u.tasks[0] && 'targetId' in u.tasks[0] ? world.units.get(u.tasks[0].targetId as number) : undefined;
       const spread = target ? Math.max(target.def.footprintX, target.def.footprintZ) * 6 : 12;
-      for (let k = Math.max(1, Math.round((dt / 1000) * NANO_PER_SECOND)); k > 0; k--) {
+      for (let k = Math.max(1, Math.round((dt / 1000) * NANO_PER_SECOND * Math.max(1, nozzles.length * 0.6))); k > 0; k--) {
         const a = Math.random() * Math.PI * 2;
         const r = Math.sqrt(Math.random()) * spread;
+        const from = nozzles[k % nozzles.length]!;
         this.nano.push({ sx: from.x, sy: from.y, sz: from.z, ex: t.x + Math.cos(a) * r, ey: t.y + Math.random() * spread * 0.6, ez: t.z + Math.sin(a) * r, born: now - Math.random() * dt });
       }
     }
