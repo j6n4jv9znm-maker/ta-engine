@@ -13,7 +13,7 @@ export const ground: MovementClass = { name: 'G', footprintX: 2, footprintZ: 2, 
 export function testUnit(over: Partial<UnitDef>): UnitAssets {
   const d: UnitDef = {
     unitName: 'X', name: 'X', description: '', side: 'ARM', objectName: '', footprintX: 2, footprintZ: 2,
-    maxVelocity: 2, acceleration: 0.2, brakeRate: 0.3, turnRate: 2000, canMove: true, canFly: false, canHover: false,
+    maxVelocity: 2, acceleration: 0.2, brakeRate: 0.3, turnRate: 2000, canMove: true, canFly: false, cruiseAlt: 100, hoverAttack: false, canHover: false,
     floater: false, bmCode: 1, maxDamage: 100, builder: false, workerTime: 0, buildTime: 100, buildCostMetal: 10,
     buildCostEnergy: 10, buildDistance: 64, energyMake: 0, metalMake: 0, energyUse: 0, metalUse: 0, makesMetal: 0,
     extractsMetal: 0, windGenerator: 0, tidalGenerator: 0, energyStorage: 0, metalStorage: 0, commander: false,

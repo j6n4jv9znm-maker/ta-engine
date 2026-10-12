@@ -166,6 +166,9 @@ const FINAL_RADIUS = 8;
 const REPATH_INTERVAL = TICKS_PER_SECOND;
 const MAX_REPATHS = 10;
 /** How many units may re-plan a path in one tick (new orders always plan at once). */
+/** How far a bomber flies on past its target before turning for another pass. */
+const BOMB_RUN_LENGTH = 700;
+
 /** After this many shots in a row are blocked, an attacking unit moves in closer. */
 export const BLOCKED_SHOTS_TO_MOVE = 3;
 const REPLANS_PER_TICK = 20;
@@ -395,7 +398,8 @@ export class World {
       this.occupancy.setBuilding(u.cellX, u.cellZ, def.footprintX, def.footprintZ, u.id, (dx, dz) =>
         yardCellPassable(def.yardMap[dz * def.footprintX + dx], open),
       );
-    } else {
+    } else if (!(def.canFly && this.isFinished(u))) {
+      // Aircraft only take up ground while being built on the pad.
       this.occupancy.setUnit(u.cellX, u.cellZ, def.footprintX, def.footprintZ, u.id);
     }
   }
@@ -529,7 +533,8 @@ export class World {
         return;
       case 'attack':
         for (const u of this.ownUnits(c.unitIds)) {
-          if (u.weapons.some((w) => w && !w.def.commandFire) && c.targetId !== u.id) this.giveTask(u, { kind: 'attack', targetId: c.targetId }, c.queue);
+          // Bombs are "command fire" weapons in TA: they drop only on an attack order.
+          if (u.weapons.some((w) => w && (!w.def.commandFire || w.def.kind === 'dropped')) && c.targetId !== u.id) this.giveTask(u, { kind: 'attack', targetId: c.targetId }, c.queue);
         }
         return;
     }
@@ -578,6 +583,13 @@ export class World {
     }
     if (u.def.bmCode === 0 && u.scripts && u.scripts.state.yardOpen !== u.yardOpen) this.occupy(u);
 
+    if (u.def.canFly && this.isFinished(u)) {
+      this.fly(u);
+      this.tellScriptMoving(u);
+      u.scripts?.tick();
+      return;
+    }
+
     let targetAngle = u.rotation;
     let targetSpeed = 0;
     if (u.order && this.canWalk(u)) {
@@ -596,23 +608,84 @@ export class World {
       this.moveUnit(u);
     }
 
-    // Tell the unit's script when it starts and stops moving, so it plays its walk animation.
+    this.tellScriptMoving(u);
+    u.scripts?.tick();
+  }
+
+  /** Tells the unit's script when it starts and stops moving, so it plays its walk (or flight) animation. */
+  private tellScriptMoving(u: SimUnit): void {
     const moving = u.speed > 0;
     if (u.scripts && moving !== u.scriptMoving) {
       u.scriptMoving = moving;
       u.scripts.start(moving ? 'StartMoving' : 'StopMoving');
     }
-    u.scripts?.tick();
+  }
+
+  /**
+   * Aircraft: fly straight to the order point at cruise height, ignoring the ground below and other
+   * units; land when there is nothing to do. Bombers on an attack keep flying over the target and
+   * come round again; everything else hovers once there.
+   */
+  private fly(u: SimUnit): void {
+    const ground = this.terrain.heightAt(u.x, u.z);
+    const busy = !!u.order || u.tasks.length > 0;
+    const cruise = Math.max(ground, this.terrain.seaLevel) + u.def.cruiseAlt;
+    let targetSpeed = 0;
+    let targetAngle = u.rotation;
+    const order = u.order;
+    if (order) {
+      const dist = Math.hypot(order.x - u.x, order.z - u.z);
+      const t = u.tasks[0];
+      const bombingRun = t?.kind === 'attack' && !u.def.hoverAttack && u.weapons.some((w) => w?.def.kind === 'dropped');
+      targetAngle = toRotation(order.x - u.x, order.z - u.z);
+      if (bombingRun) {
+        targetSpeed = u.def.maxVelocity;
+        // After passing over the target, keep going straight for a while before turning back, so the
+        // next approach is a long straight run (bombs fall well ahead of where they're dropped).
+        const [fx, fz] = toDirection(u.rotation);
+        const behind = fx * (order.x - u.x) + fz * (order.z - u.z) < 0;
+        if (dist < 48 || (behind && dist < BOMB_RUN_LENGTH)) targetAngle = u.rotation;
+      } else if (dist < 6) {
+        u.order = undefined;
+      } else {
+        const braking = (u.speed * u.speed) / (2 * Math.max(0.05, u.def.brakeRate));
+        targetSpeed = dist > braking ? u.def.maxVelocity : 0;
+        // Don't race off at full speed while still facing the wrong way.
+        const [fx, fz] = toDirection(u.rotation);
+        const facing = (fx * (order.x - u.x) + fz * (order.z - u.z)) / Math.max(1e-6, dist);
+        targetSpeed *= Math.max(0.25, facing);
+      }
+    }
+    // Climb before flying off; settle down to land when idle.
+    const wantY = busy ? cruise : Math.max(ground, this.terrain.seaLevel);
+    const climb = Math.max(1.5, u.def.maxVelocity * 0.4);
+    u.y += clamp(wantY - u.y, -climb, climb);
+    if (u.y - ground < u.def.cruiseAlt * 0.5 && busy) targetSpeed = Math.min(targetSpeed, u.def.maxVelocity * 0.25);
+
+    u.rotation = turnTowards(u.rotation, targetAngle, u.def.turnRate);
+    if (targetSpeed > u.speed) u.speed = Math.min(targetSpeed, u.speed + Math.max(0.05, u.def.acceleration));
+    else u.speed = Math.max(targetSpeed, u.speed - Math.max(0.05, u.def.brakeRate));
+    if (u.speed > 0) {
+      const [dx, dz] = toDirection(u.rotation);
+      u.x = clamp(u.x + dx * u.speed, 0, this.map.widthUnits - 1);
+      u.z = clamp(u.z + dz * u.speed, 0, this.map.heightUnits - 1);
+      [u.cellX, u.cellZ] = this.terrain.footprintCell(u.x, u.z, u.def.footprintX, u.def.footprintZ);
+    }
+  }
+
+  /** Whether a unit is in the air (only anti-air weapons can hit it there). */
+  airborne(u: SimUnit): boolean {
+    return u.def.canFly && u.y - Math.max(this.terrain.heightAt(u.x, u.z), this.terrain.seaLevel) > 12;
   }
 
   /**
    * An idle armed unit goes after enemies it can see (like TA's "maneuver"): one in sight but out of
-   * range, or the one it's shooting at when its shots keep getting blocked. Builders and Commanders
-   * stay put. Checked about once a second per unit.
+   * range, or the one it's shooting at when its shots keep getting blocked. Builders, Commanders and
+   * aircraft stay put (idle aircraft land). Checked about once a second per unit.
    */
   private engage(u: SimUnit): void {
     if ((this.tickCount + u.id) % TICKS_PER_SECOND !== 0) return;
-    if (u.def.builder || u.def.commander || !this.canWalk(u)) return;
+    if (u.def.builder || u.def.commander || u.def.canFly || !this.canWalk(u)) return;
     const slots = u.weapons.filter((w): w is WeaponSlot => !!w && !w.def.commandFire);
     if (!slots.length) return;
     const range = Math.max(...slots.map((w) => w.def.range));
@@ -666,6 +739,11 @@ export class World {
         if (!target || target.dying || (t.auto && !this.canSee(u.owner, target))) return this.finishTask(u);
         // Close in until the shortest-ranged weapon reaches, then hold position and shoot. If shots keep
         // hitting rocks, trees or hills on the way, move in much closer to get a clear shot.
+        // Bombers make passes over the target instead of stopping at weapon range.
+        if (u.def.canFly && !u.def.hoverAttack && u.weapons.some((w) => w?.def.kind === 'dropped')) {
+          if (!u.order || u.order.x !== target.x || u.order.z !== target.z) u.order = { x: target.x, z: target.z };
+          return;
+        }
         const range = Math.min(...u.weapons.filter((w): w is WeaponSlot => !!w && !w.def.commandFire).map((w) => w.def.range));
         const want = u.blockedShots >= BLOCKED_SHOTS_TO_MOVE ? Math.max(48, range * 0.35) : range * 0.9;
         if (Math.hypot(target.x - u.x, target.z - u.z) > want) this.driveTo(u, target.x, target.z);
@@ -915,6 +993,13 @@ export class World {
     this.occupancy.clearUnit(unit.cellX, unit.cellZ, unit.def.footprintX, unit.def.footprintZ, unit.id);
     [unit.cellX, unit.cellZ] = this.terrain.footprintCell(unit.x, unit.z, unit.def.footprintX, unit.def.footprintZ);
     this.occupancy.setUnit(unit.cellX, unit.cellZ, unit.def.footprintX, unit.def.footprintZ, unit.id);
+    if (unit.def.canFly) {
+      // Aircraft lift off the pad and fly to the rally point (or just in front of the factory).
+      this.occupancy.clearUnit(unit.cellX, unit.cellZ, unit.def.footprintX, unit.def.footprintZ, unit.id);
+      const [rx, rz] = factory.rally ?? [ex + fx * 120, ez + fz * 120];
+      unit.tasks.push({ kind: 'move', x: rx, z: rz });
+      return;
+    }
     if (!this.canWalk(unit)) return;
     unit.exitFactory = factory.id;
     unit.rotation = factory.rotation;
