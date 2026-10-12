@@ -81,6 +81,7 @@ function unitDef(over: Partial<UnitDef> = {}): UnitAssets {
     damageModifier: 1,
     categories: [],
     tedClass: '',
+    soundCategory: '',
     movementClass: tank,
     ownMovement: tank,
     ...over,

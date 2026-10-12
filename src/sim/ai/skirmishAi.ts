@@ -357,7 +357,7 @@ export class SkirmishAi {
   }
 
   private issue(world: World, c: Command): void {
-    world.issue(c);
+    world.issue(c, false);
   }
 }
 

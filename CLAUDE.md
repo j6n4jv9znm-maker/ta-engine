@@ -18,18 +18,22 @@ TypeScript (strict) + Vite + Three.js (WebGL) in the browser for development, Vi
 - `npm test`: run Vitest once (`npm run test:watch` to watch)
 - `npm run typecheck`: TypeScript check
 - `npm run build`: typecheck and production build
+- `npm run app`: the Mac app (Tauri) in development; `npm run app:build` builds `src-tauri/target/release/bundle/macos/TA Engine.app` (needs Rust: `brew install rust`). On first launch the app asks for the TA folder and remembers it; it keeps a log at `~/Library/Application Support/io.github.taengine.game/log.txt`
 - `npm run ta -- <command>`: data CLI (`archives`, `ls`, `extract`, `cat`, `tdf`, `fbi ARMCOM`, `units`, `palette`); extracted files go to the gitignored `extracted/`
 - Debug pages (dev server): http://localhost:5173/archives.html (files, FBI JSON, GAF sprites), http://localhost:5173/models.html (unit model viewer; runs unit scripts: walk, aim, fire, build, open, die), http://localhost:5173/maps.html (map viewer), http://localhost:5173/game.html (skirmish against the computer, or a sandbox; `window.ta` in the console exposes the game for debugging)
 
 ## Layout
 - `src/`: engine source (`main.ts` is the browser entry)
   - `formats/`: file-format parsers (HPI archives, TDF text, palette, GAF sprites, 3DO models, TNT maps, OTA map settings, COB unit scripts)
-  - `sim/`: simulation (deterministic, 30 Hz, no rendering): seeded RNG, piece animation, COB unit-script VM (`sim/cob/`), per-unit script runner, unit definitions, terrain movement rules, A* pathfinding, economy (`economy.ts`), build menus, weapons and projectiles (`weaponDef.ts`, `combat.ts`), line of sight (`visibility.ts`), the skirmish AI (`sim/ai/`: reads TA's ai/*.txt profiles, plays through commands), and `world.ts` (the game loop: units, commands, tasks, steering, collisions, building, factories, reclaiming, damage, death and wrecks)
+  - `sim/`: simulation (deterministic, 30 Hz, no rendering): seeded RNG, piece animation, COB unit-script VM (`sim/cob/`), per-unit script runner, unit definitions, terrain movement rules, A* pathfinding, economy (`economy.ts`), build menus, weapons and projectiles (`weaponDef.ts`, `combat.ts`), line of sight (`visibility.ts`), the skirmish AI (`sim/ai/`: reads TA's ai/*.txt profiles, plays through commands), `skirmish.ts` (match setup, saving and replaying games), and `world.ts` (the game loop: units, commands, tasks, steering, collisions, building, factories, reclaiming, damage, death and wrecks)
   - `map/`: renderer-independent map data (features, placed features, heights); world units are TA pixels from the map's top-left
   - `graphics/`: renderer-side code (textures, model geometry, Three.js model builder, terrain, feature sprites, RTS camera, posing models from sim piece state, drawing sim units, shots/explosions/debris, fog)
-  - `io/`: byte sources for Node, browser files and the dev server
+  - `io/`: byte sources for Node, browser files, the dev server and the Mac app (`appData.ts`)
+  - `audio/`: game sounds from the original WAVs and SOUND.TDF
+  - `ui/`: the setup screen and saved-game storage
   - `vfs.ts`: layers archives in TA's load order (.hpi < .ufo < .ccx < .gpf < .gp3)
   - `debug/`: debug viewer pages
+- `src-tauri/`: the Mac app shell (Rust): remembers the TA folder and serves archive byte ranges to the page
 - `tools/`: command-line tools (`ta.ts`)
 - `test/`: Vitest tests
 - `data/`: your local game files, gitignored

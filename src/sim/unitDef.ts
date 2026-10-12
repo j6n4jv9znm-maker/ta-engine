@@ -80,6 +80,8 @@ export interface UnitDef {
   categories: string[];
   /** FBI tedclass (COMMANDER, CONSTR, PLANT, ENERGY, METAL, TANK, KBOT, ...). */
   tedClass: string;
+  /** SOUND.TDF section for its select/move/arrive/build sounds. */
+  soundCategory: string;
   /** The class used for pathfinding; units without one use their own footprint and limits. */
   movementClass: MovementClass;
   /** The unit's own limits, used for collision checks (TA ignores the movement class there, per RWE). */
@@ -168,6 +170,7 @@ export function parseUnitDef(fbi: TdfBlock, movementClasses: Map<string, Movemen
     damageModifier: n('damagemodifier', 1),
     categories: s('category').toUpperCase().split(/\s+/).filter(Boolean),
     tedClass: s('tedclass').toUpperCase(),
+    soundCategory: s('soundcategory').toUpperCase(),
     movementClass: movementClasses.get(mcName) ?? own,
     ownMovement: own,
   };

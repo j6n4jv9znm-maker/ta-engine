@@ -12,6 +12,10 @@ import { parsePalette, PALETTE_PATH, type Palette } from '../formats/palette';
 import { CombatRenderer } from '../graphics/combatRenderer';
 import { createFeatureSprites, type FeatureSprites } from '../graphics/featureSprites';
 import { RtsCamera } from '../graphics/rtsCamera';
+import { parsePcx } from '../formats/pcx';
+import { GameAudio, type UnitSoundKey } from '../audio/gameAudio';
+import { SetupScreen, type GameSettings } from '../ui/setupScreen';
+import { addSave, deleteSave, describeSave, listSaves } from '../ui/saves';
 import { createTerrain, type Terrain } from '../graphics/terrain';
 import { loadTextureLibrary, type TextureLibrary } from '../graphics/textures';
 import { createUnitModel, type UnitModel } from '../graphics/threeModel';
@@ -20,7 +24,7 @@ import { loadFeatureDefinitions, type FeatureDef } from '../map/features';
 import { listMaps, loadGameMap, type GameMap } from '../map/mapData';
 import { UnitAssetLoader } from '../sim/assets';
 import { loadAiProfile, type AiPlan, type Difficulty } from '../sim/ai/aiProfile';
-import { SkirmishAi } from '../sim/ai/skirmishAi';
+import { createSkirmish, replayGame, saveGame, type SavedGame } from '../sim/skirmish';
 import { loadBuildMenus, type BuildMenus } from '../sim/buildMenus';
 import { TICKS_PER_SECOND } from '../sim/pieces';
 import { loadUnitDefs } from '../sim/unitDef';
@@ -28,13 +32,11 @@ import { EXPLORED, RADAR, SEEN, VIS_TILE } from '../sim/visibility';
 import { loadWeaponDefs, type WeaponDef } from '../sim/weaponDef';
 import { World, type SimFeature, type SimUnit, type UnitAssets } from '../sim/world';
 import type { Vfs } from '../vfs';
+import { appDataDir, appLog, chooseAppDataDir, inApp, openAppVfs } from '../io/appData';
 import { openDevServerVfs, openPickedVfs } from './devData';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $('status');
-const mapSel = $<HTMLSelectElement>('map');
-const startWithSel = $<HTMLSelectElement>('startWith');
-const opponentSel = $<HTMLSelectElement>('opponent');
 const clockEl = $('clock');
 const selInfoEl = $('selInfo');
 const commandsEl = $('commands');
@@ -42,27 +44,13 @@ const buildEl = $('build');
 const minimapEl = $<HTMLCanvasElement>('minimap');
 const boxEl = $('box');
 const view = $('view');
+const loadingEl = $('loading');
 
 const ME = 0;
-const ARMY: [string, number][] = [
-  ['ARMPW', 6],
-  ['ARMSTUMP', 4],
-  ['ARMFLASH', 4],
-  ['ARMJETH', 3],
-  ['ARMHAM', 3],
-  ['ARMROCK', 3],
-];
-const CORE_ARMY: [string, number][] = [
-  ['CORAK', 6],
-  ['CORRAID', 4],
-  ['CORGATOR', 4],
-  ['CORCRASH', 3],
-  ['CORTHUD', 3],
-  ['CORSTORM', 3],
-];
 const TEAM_COLOURS = [0, 1]; // blue for you, red for the other side
 
 let vfs: Vfs | undefined;
+let audio: GameAudio | undefined;
 let palette: Palette | undefined;
 let lib: TextureLibrary | undefined;
 let featureDefs: Map<string, FeatureDef> | undefined;
@@ -89,6 +77,9 @@ interface Game {
 let game: Game | undefined;
 const selected = new Set<number>();
 let paused = false;
+let setup: SetupScreen | undefined;
+let settings: GameSettings | undefined;
+let seed = 0;
 let speed = 1;
 
 /** What a left-click does right now. */
@@ -143,7 +134,7 @@ function frame(t: number): void {
   last = t;
   rts.update(dt / 1000);
   timed('sim', () => {
-    if (game && !paused) {
+    if (game && !paused && !setup?.visible) {
       acc += dt * speed;
       let steps = 0;
       while (acc >= TICK_MS && steps++ < 20) {
@@ -159,6 +150,7 @@ function frame(t: number): void {
     const alpha = paused ? 1 : acc / TICK_MS;
     timed('units', () => g.units.update(g.world, alpha, selected));
     timed('combat', () => g.combat.update(g.world, alpha, dt / 1000, g.units, ME));
+    timed('audio', () => audio?.update(g.world, ME, listener()));
     timed('features', () => {
       syncFeatures(g);
       syncFog(g);
@@ -179,10 +171,17 @@ renderer.setAnimationLoop(frame);
 // --- Loading -------------------------------------------------------------------
 async function load(open: () => Promise<Vfs | undefined>, none: string): Promise<void> {
   statusEl.textContent = 'Opening archives…';
+  // Show loading progress over the whole window until the setup screen appears.
+  const progress = new MutationObserver(() => (loadingEl.textContent = statusEl.textContent));
+  progress.observe(statusEl, { childList: true, characterData: true, subtree: true });
+  loadingEl.textContent = statusEl.textContent;
+  loadingEl.hidden = false;
   try {
     const v = await open();
     if (!v) {
       statusEl.textContent = none;
+      progress.disconnect();
+      loadingEl.hidden = true;
       return;
     }
     vfs = v;
@@ -198,42 +197,44 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
       if (a) assets.set(name, a);
     }
     menus = await loadBuildMenus(v, new Set(defs.keys()));
+    audio = await GameAudio.load(v);
     weapons = await loadWeaponDefs(v);
     aiPlans = await loadAiProfile(v);
-    mapSel.textContent = '';
-    for (const name of listMaps(v)) {
-      if (/example/i.test(name)) continue;
-      const o = document.createElement('option');
-      o.value = o.textContent = name;
-      mapSel.append(o);
-    }
-    // Ashap Plateau is a classic open two-player map; good for a first game against the computer.
-    const preferred = ['Ashap Plateau', 'The Pass'].find((n) => [...mapSel.options].some((o) => o.value === n));
-    mapSel.value = preferred ?? mapSel.options[0]?.value ?? '';
-    await startGame(mapSel.value);
+    const maps = listMaps(v)
+      .filter((n) => !/example/i.test(n))
+      .sort((a, b) => a.localeCompare(b));
+    setup?.el.remove();
+    setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined);
+    document.body.append(setup.el);
+    showSaves();
+    setup.show(false);
+    progress.disconnect();
+    loadingEl.hidden = true;
+    statusEl.textContent = 'Pick a map and press Start game.';
   } catch (e) {
     statusEl.textContent = String(e);
+    progress.disconnect();
+    loadingEl.hidden = true;
   }
 }
 
-async function startGame(mapName: string): Promise<void> {
+async function startGame(s: GameSettings, save?: SavedGame): Promise<void> {
   if (!vfs || !palette || !lib || !featureDefs) return;
+  settings = s;
+  const mapName = s.map;
   statusEl.textContent = `Loading ${mapName}…`;
   const map = await loadGameMap(vfs, mapName, featureDefs);
-  const world = new World(map, { seed: 20261011, assets: (n) => assets.get(n.toLowerCase()), weapons, featureDefs });
-  const starts = map.ota?.schemas[0]?.startPositions.filter((p): p is { x: number; z: number } => !!p) ?? [];
-  const mine = starts[0] ?? { x: map.widthUnits / 2, z: map.heightUnits / 2 };
-  const theirs = starts[1];
-  const face = (z: number) => (z < map.heightUnits / 2 ? 0 : 32768);
-  world.spawn(assets.get('armcom')!, ME, mine.x, mine.z, face(mine.z));
-  const armies = startWithSel.value === 'army';
-  if (armies) spawnGroup(world, ARMY, ME, mine.x, mine.z + (mine.z < map.heightUnits / 2 ? 120 : -120));
-  if (theirs) {
-    world.spawn(assets.get('corcom')!, 1, theirs.x, theirs.z, face(theirs.z));
-    if (armies) spawnGroup(world, CORE_ARMY, 1, theirs.x, theirs.z + (theirs.z < map.heightUnits / 2 ? 120 : -120));
+  seed = save?.seed ?? (Math.random() * 2 ** 31) | 0;
+  const deps = { assets: (n: string) => assets.get(n.toLowerCase()), weapons, featureDefs, menus, aiPlans };
+  const { world, home: mine } = createSkirmish(map, s, seed, deps);
+  if (save) {
+    loadingEl.hidden = false;
+    await replayGame(world, save, (f) => (loadingEl.textContent = `Loading saved game… ${Math.round(f * 100)}%`));
+    loadingEl.hidden = true;
   }
-  const difficulty = opponentSel.value as Difficulty | 'none';
-  if (difficulty !== 'none') world.ais.push(new SkirmishAi(1, difficulty, menus, aiPlans.get(difficulty), 977));
+  audio?.reset(world.tickCount);
+  paused = false;
+  $('pause').textContent = 'Pause';
 
   const terrain = createTerrain(map.tnt, palette);
   const sprites = await createFeatureSprites(vfs, palette, map.features);
@@ -247,7 +248,7 @@ async function startGame(mapName: string): Promise<void> {
   group.add(terrain.mesh, sprites.group, featureGroup, units.group, combat.group);
   scene.add(group);
   game = { map, world, terrain, sprites, featureModels, featureObjects, hiddenFeatures: new Set(), extraFeatures: new Map(), units, combat, fogVersion: -1, group };
-  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt };
+  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt, audio };
   selected.clear();
   setMode({ kind: 'select' });
   acc = 0;
@@ -261,14 +262,6 @@ async function startGame(mapName: string): Promise<void> {
   statusEl.textContent = `${mapName}`;
 }
 
-function spawnGroup(world: World, list: [string, number][], owner: number, x: number, z: number): void {
-  let i = 0;
-  for (const [name, count] of list) {
-    const a = assets.get(name.toLowerCase());
-    if (!a) continue;
-    for (let k = 0; k < count; k++, i++) world.spawn(a, owner, x + ((i % 6) - 2.5) * 48, z + Math.floor(i / 6) * 48);
-  }
-}
 
 function stopGame(): void {
   if (!game) return;
@@ -397,7 +390,7 @@ function drawOverlay(): void {
     g.fillText(lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2);
     g.font = '14px ui-monospace, Menlo, monospace';
     g.fillStyle = '#ddd';
-    g.fillText('Press Restart (top left) to play again.', w / 2, h / 2 + 26);
+    g.fillText('Press Restart to play again, or Menu for a new game.', w / 2, h / 2 + 26);
   }
 }
 
@@ -493,18 +486,28 @@ window.addEventListener('mouseup', (e) => {
     const hit = groundAt(p);
     if (builder && hit) {
       const site = game.world.buildSite(mode.unitName, hit.x, hit.z);
-      if (site.ok && !overlapsQueued(mode.unitName, site)) game.world.issue({ kind: 'build', unitId: builder.id, unitName: mode.unitName, x: site.x, z: site.z, queue: e.shiftKey });
+      if (site.ok && !overlapsQueued(mode.unitName, site)) {
+        game.world.issue({ kind: 'build', unitId: builder.id, unitName: mode.unitName, x: site.x, z: site.z, queue: e.shiftKey });
+        reply('ok1');
+      } else {
+        reply('cant1');
+        if (!e.shiftKey) return; // stay in placing mode so the player can try another spot
+      }
     }
     if (!e.shiftKey) setMode({ kind: 'select' });
     return;
   }
   if (mode.kind === 'reclaim') {
     const f = featureAt(p);
-    if (f) game.world.issue({ kind: 'reclaim', unitIds: builderIds(), featureId: f.id, queue: e.shiftKey });
+    if (f) {
+      game.world.issue({ kind: 'reclaim', unitIds: builderIds(), featureId: f.id, queue: e.shiftKey });
+      reply('ok1');
+    }
     if (!e.shiftKey) setMode({ kind: 'select' });
     return;
   }
 
+  const before = new Set(selected);
   if (!e.shiftKey) selected.clear();
   if (Math.hypot(p.x - start.x, p.y - start.y) < 5) {
     const u = unitAt(p, mineFinished);
@@ -528,6 +531,7 @@ window.addEventListener('mouseup', (e) => {
   }
   menuPage = 0;
   refreshPanel();
+  if ([...selected].some((id) => !before.has(id))) reply('select1');
 });
 
 canvas.addEventListener('contextmenu', (e) => {
@@ -545,23 +549,27 @@ canvas.addEventListener('contextmenu', (e) => {
   const enemy = unitAt(p, (u) => u.owner !== ME && !u.dying && game!.world.canSee(ME, u));
   if (enemy) {
     game.world.issue({ kind: 'attack', unitIds: ids, targetId: enemy.id, queue: e.shiftKey });
+    reply('ok1');
     return;
   }
   // Help build a half-finished unit?
   const unfinished = unitAt(p, (u) => u.owner === ME && !game!.world.isFinished(u));
   if (unfinished && builders.length) {
     game.world.issue({ kind: 'assist', unitIds: builders, targetId: unfinished.id, queue: e.shiftKey });
+    reply('ok1');
     return;
   }
   // Reclaim a rock, tree or wreck?
   const f = builders.length ? featureAt(p) : undefined;
   if (f) {
     game.world.issue({ kind: 'reclaim', unitIds: builders, featureId: f.id, queue: e.shiftKey });
+    reply('ok1');
     return;
   }
   const hit = groundAt(p);
   if (!hit) return;
   game.world.issue({ kind: 'move', unitIds: ids, x: hit.x, z: hit.z, queue: e.shiftKey });
+  reply('ok1');
   showMoveMarker(hit);
 });
 
@@ -594,6 +602,22 @@ window.addEventListener('keydown', (e) => {
     }
   }
 });
+
+/** The first selected unit answers with one of its sounds (TA plays one reply per order, not one per unit). */
+function reply(key: UnitSoundKey): void {
+  const u = game ? [...selected].map((id) => game!.world.units.get(id)).find((x) => x) : undefined;
+  if (u) audio?.unitSound(u.def, key);
+}
+
+/** Where sounds are heard from: the middle of the view, and how wide the view is on the ground. */
+function listener(): { x: number; z: number; halfWidth: number } {
+  const halfHeight = rts.distance * Math.tan(THREE.MathUtils.degToRad(rts.camera.fov / 2));
+  return { x: rts.target.x, z: rts.target.z, halfWidth: halfHeight * rts.camera.aspect };
+}
+
+// Browsers only allow sound once the player has clicked or pressed a key.
+window.addEventListener('pointerdown', () => audio?.unlock(), true);
+window.addEventListener('keydown', () => audio?.unlock(), true);
 
 function setMode(m: Mode): void {
   mode = m;
@@ -749,8 +773,11 @@ function refreshPanel(): void {
     const b = document.createElement('button');
     const queued = builder.factory?.queue.filter((q) => q.unitName === name).reduce((s, q) => s + q.count, 0) ?? 0;
     const notYet = !supported(def);
-    b.innerHTML = `${esc(def.name)}<small>${notYet ? 'not in the engine yet' : `${Math.round(def.buildCostMetal)} M · ${Math.round(def.buildCostEnergy)} E`}</small>${queued ? `<span class="count">${queued}</span>` : ''}`;
-    b.title = notYet ? 'Aircraft and ships come in a later phase.' : `${def.description}\nBuild time ${Math.round(def.buildTime)}`;
+    const pic = unitPic(name);
+    b.innerHTML = `${pic ? `<img src="${pic}" alt="">` : '<span class="nopic"></span>'}<span class="name">${esc(def.name)}</span>${queued ? `<span class="count">${queued}</span>` : ''}`;
+    b.title = notYet
+      ? `${def.name}: aircraft and ships aren't in the game yet.`
+      : `${def.name}: ${def.description}\n${Math.round(def.buildCostMetal)} metal · ${Math.round(def.buildCostEnergy)} energy · build time ${Math.round(def.buildTime)}`;
     b.disabled = notYet;
     if (notYet) b.style.opacity = '0.45';
     b.classList.toggle('on', mode.kind === 'place' && mode.unitName === name);
@@ -766,6 +793,70 @@ function refreshPanel(): void {
     grid.append(b);
   }
   buildEl.append(grid);
+}
+
+/** The saved-games list on the setup screen. */
+function showSaves(): void {
+  if (!setup) return;
+  const slot = setup.slot;
+  slot.textContent = '';
+  const saves = listSaves();
+  if (!saves.length) return;
+  const h = document.createElement('h2');
+  h.textContent = 'Saved games';
+  slot.append(h);
+  for (const save of saves) {
+    const row = document.createElement('div');
+    row.className = 'save-row';
+    const load = document.createElement('button');
+    load.textContent = describeSave(save);
+    load.title = 'Load this game';
+    load.addEventListener('click', () => {
+      setup!.hide();
+      void startGame(save.settings, save);
+    });
+    const del = document.createElement('button');
+    del.textContent = '×';
+    del.title = 'Delete this save';
+    del.addEventListener('click', () => {
+      deleteSave(save.savedAt);
+      showSaves();
+    });
+    row.append(load, del);
+    slot.append(row);
+  }
+}
+
+function clockText(tick: number): string {
+  const secs = Math.floor(tick / 30);
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+}
+
+// Build-menu pictures (unitpics/<name>.pcx), decoded once and kept as data URLs.
+const unitPics = new Map<string, string | null>();
+function unitPic(name: string): string | undefined {
+  const key = name.toLowerCase();
+  const have = unitPics.get(key);
+  if (have !== undefined) return have ?? undefined;
+  unitPics.set(key, null);
+  const path = `unitpics/${key}.pcx`;
+  if (vfs?.exists(path)) {
+    void vfs.read(path).then((bytes) => {
+      try {
+        const img = parsePcx(bytes);
+        const c = document.createElement('canvas');
+        c.width = img.width;
+        c.height = img.height;
+        c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(img.rgba), img.width, img.height), 0, 0);
+        unitPics.set(key, c.toDataURL());
+        panelKey = '';
+        refreshPanelSoon();
+      } catch {
+        // no picture: the button shows the name only
+      }
+    });
+  }
+  return undefined;
 }
 
 /** Aircraft, ships and the factories that only make them aren't simulated yet. */
@@ -912,13 +1003,23 @@ minimapEl.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('change', (e) => (e.target as HTMLElement).tagName === 'SELECT' && (e.target as HTMLElement).blur());
 document.addEventListener('click', (e) => (e.target as HTMLElement).closest('button')?.blur());
 canvas.addEventListener('mousedown', () => (document.activeElement as HTMLElement | null)?.blur?.());
-mapSel.addEventListener('change', () => void startGame(mapSel.value));
-startWithSel.addEventListener('change', () => void startGame(mapSel.value));
-opponentSel.addEventListener('change', () => void startGame(mapSel.value));
-$('restart').addEventListener('click', () => void startGame(mapSel.value));
+$('restart').addEventListener('click', () => settings && void startGame(settings));
+$('save').addEventListener('click', () => {
+  if (!game || !settings) return;
+  const ok = addSave(saveGame(game.world, settings, seed));
+  statusEl.textContent = ok ? `Saved at ${clockText(game.world.tickCount)}. Load it from Menu.` : 'Could not save (storage full?).';
+  showSaves();
+});
+$('menu').addEventListener('click', () => setup?.show(!!game));
 $<HTMLInputElement>('edge').addEventListener('change', (e) => {
   rts.edgeScroll = (e.target as HTMLInputElement).checked;
   (e.target as HTMLInputElement).blur();
+});
+$('sound').addEventListener('click', () => {
+  if (!audio) return;
+  audio.muted = !audio.muted;
+  $('sound').textContent = audio.muted ? 'Sound off' : 'Sound on';
+  $('sound').classList.toggle('on', !audio.muted);
 });
 $('pause').addEventListener('click', () => {
   paused = !paused;
@@ -937,4 +1038,34 @@ function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
 
-void load(openDevServerVfs, 'No data/ folder found. Pick your TA folder instead.');
+// In the Mac app, the game files come from the folder the player chose on first launch; on the
+// dev server, from data/.
+async function boot(): Promise<void> {
+  if (!inApp()) {
+    void load(openDevServerVfs, 'No data/ folder found. Pick your TA folder instead.');
+    return;
+  }
+  // Keep a log of status messages and errors, for looking into problems later.
+  appLog('started');
+  new MutationObserver(() => appLog(`status: ${statusEl.textContent}`)).observe(statusEl, { childList: true, characterData: true, subtree: true });
+  window.addEventListener('error', (e) => appLog(`error: ${e.message} at ${e.filename}:${e.lineno}`));
+  window.addEventListener('unhandledrejection', (e) => appLog(`error: ${String(e.reason)}`));
+  if (await appDataDir()) {
+    void load(openAppVfs, 'Your Total Annihilation folder has no game files any more.');
+    return;
+  }
+  const welcome = $('welcome');
+  welcome.hidden = false;
+  $('chooseFolder').addEventListener('click', () => {
+    $('welcomeError').textContent = '';
+    chooseAppDataDir().then(
+      (dir) => {
+        if (!dir) return;
+        welcome.hidden = true;
+        void load(openAppVfs, 'That folder has no game files.');
+      },
+      (err) => ($('welcomeError').textContent = String(err)),
+    );
+  });
+}
+void boot();

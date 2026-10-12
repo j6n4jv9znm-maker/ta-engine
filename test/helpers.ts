@@ -18,7 +18,7 @@ export function testUnit(over: Partial<UnitDef>): UnitAssets {
     buildCostEnergy: 10, buildDistance: 64, energyMake: 0, metalMake: 0, energyUse: 0, metalUse: 0, makesMetal: 0,
     extractsMetal: 0, windGenerator: 0, tidalGenerator: 0, energyStorage: 0, metalStorage: 0, commander: false,
     activateWhenBuilt: false, onOffable: false, yardMap: '', corpse: '', weapons: ['', '', ''], explodeAs: '',
-    selfDestructAs: '', sightDistance: 400, radarDistance: 0, damageModifier: 1, categories: [], tedClass: '', movementClass: ground, ownMovement: ground,
+    selfDestructAs: '', sightDistance: 400, radarDistance: 0, damageModifier: 1, categories: [], tedClass: '', soundCategory: '', movementClass: ground, ownMovement: ground,
     ...over,
   };
   return { def: d, model: undefined, script: undefined };

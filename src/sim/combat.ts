@@ -56,6 +56,8 @@ export interface Projectile {
   vz: number;
   dieTick: number | undefined;
   targetUnit: number | undefined;
+  /** The unit that fired it, if it was aiming at a unit (to tell it when its shots are blocked). */
+  shooter?: number;
   /** Where the shot started, for drawing beams. */
   originX: number;
   originY: number;
@@ -64,11 +66,17 @@ export interface Projectile {
 }
 
 export type CombatEvent =
-  | { tick: number; kind: 'explosion'; x: number; y: number; z: number; gaf: string; art: string; radius: number }
-  | { tick: number; kind: 'fire'; unitId: number; weapon: string; x: number; y: number; z: number }
+  | { tick: number; kind: 'explosion'; x: number; y: number; z: number; gaf: string; art: string; radius: number; sound: string }
+  /** `first` is the first shot of a burst. */
+  | { tick: number; kind: 'fire'; unitId: number; weapon: string; x: number; y: number; z: number; first: boolean }
+  /** A unit finished being built. */
+  | { tick: number; kind: 'complete'; unitId: number; owner: number }
   | { tick: number; kind: 'death'; unitId: number; unitName: string; x: number; y: number; z: number }
   /** A unit script blew a piece off (explode); `flags` are TA's explode types (SHATTER, FALL, ...). */
   | { tick: number; kind: 'debris'; unitId: number; piece: string; flags: number };
+
+/** How far (world units) a straight shot may dip into the ground before it counts as hitting it. */
+const GROUND_SKIM = 6;
 
 export function makeWeaponSlots(world: World, u: SimUnit): (WeaponSlot | undefined)[] {
   return u.def.weapons.map((name) => {
@@ -167,8 +175,8 @@ function tryFire(world: World, u: SimUnit, slot: WeaponSlot, index: WeaponIndex)
     dir = [rx, ry, rz];
   }
   const distance = Math.hypot(to[0] - fx, to[1] - fy, to[2] - fz);
-  world.spawnProjectile(u.owner, w, [fx, fy, fz], dir, distance, target?.id);
-  world.events.push({ tick: world.tickCount, kind: 'fire', unitId: u.id, weapon: w.name, x: fx, y: fy, z: fz });
+  world.spawnProjectile(u.owner, w, [fx, fy, fz], dir, distance, target?.id, u.id);
+  world.events.push({ tick: world.tickCount, kind: 'fire', unitId: u.id, weapon: w.name, x: fx, y: fy, z: fz, first: b.fired === 0 });
 
   if (b.fired === 0) {
     u.scripts?.start(`Fire${SCRIPT_SUFFIX[index]}`);
@@ -255,7 +263,9 @@ function collide(world: World, p: Projectile): void {
   }
   const ground = terrain.heightAt(p.x, p.z);
   if (ground < terrain.seaLevel && p.y <= terrain.seaLevel) return impact(world, p, true);
-  if (p.y <= ground) {
+  // Straight shots skim small bumps instead of stopping in the dirt just in front of the target.
+  const skim = p.weapon.kind === 'ballistic' ? 0 : GROUND_SKIM;
+  if (p.y <= ground - skim) {
     if (p.weapon.groundBounce) {
       p.vy = 0;
       p.y = p.prevY;
@@ -280,6 +290,7 @@ function collide(world: World, p: Projectile): void {
 
 function impact(world: World, p: Projectile, water: boolean): void {
   p.dead = true;
+  noteBlocked(world, p);
   explode(world, p.weapon, p.owner, p.x, p.y, p.z, water);
 }
 
@@ -294,6 +305,7 @@ export function explode(world: World, w: WeaponDef, owner: number, x: number, y:
     gaf: water && w.waterExplosionGaf ? w.waterExplosionGaf : w.explosionGaf,
     art: water && w.waterExplosionArt ? w.waterExplosionArt : w.explosionArt,
     radius: w.damageRadius,
+    sound: water && w.soundWater ? w.soundWater : w.soundHit,
   });
   const r = Math.max(1, w.damageRadius);
   for (const u of world.unitsInOrder()) {
@@ -346,4 +358,19 @@ function angleDiff(a: number, b: number): number {
 /** Angle units to the signed COB value scripts expect. */
 function toCob(a: number): number {
   return a >= ANGLE_FULL_TURN / 2 ? a - ANGLE_FULL_TURN : a;
+}
+
+/**
+ * Tells the shooter whether its shot reached what it was aiming at, or was stopped well short of it
+ * by a rock, tree or hill (so an attacking unit knows to move for a clearer shot).
+ */
+function noteBlocked(world: World, p: Projectile): void {
+  const shooter = p.shooter !== undefined ? world.units.get(p.shooter) : undefined;
+  const target = p.targetUnit !== undefined ? world.units.get(p.targetUnit) : undefined;
+  if (!shooter || !target) return;
+  const toTarget = Math.hypot(target.x - p.originX, target.z - p.originZ);
+  const travelled = Math.hypot(p.x - p.originX, p.z - p.originZ);
+  const miss = Math.hypot(target.x - p.x, target.z - p.z);
+  if (travelled < toTarget * 0.8 && miss > Math.max(48, p.weapon.damageRadius * 1.5)) shooter.blockedShots++;
+  else shooter.blockedShots = 0;
 }

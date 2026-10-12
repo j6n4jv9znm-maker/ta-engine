@@ -45,7 +45,8 @@ export type Task =
   | { kind: 'build'; unitName: string; x: number; z: number; targetId?: number; started?: boolean; waited?: number }
   | { kind: 'assist'; unitId: number; started?: boolean; waited?: number }
   | { kind: 'reclaim'; featureId: number; progress: number; started?: boolean; waited?: number }
-  | { kind: 'attack'; targetId: number; started?: boolean };
+  /** `auto`: the unit picked this fight itself; it gives up once the target is out of sight. */
+  | { kind: 'attack'; targetId: number; started?: boolean; auto?: boolean };
 
 export type Command =
   | { kind: 'move'; unitIds: number[]; x: number; z: number; queue?: boolean }
@@ -111,6 +112,8 @@ export interface SimUnit {
   path: { waypoints: [number, number][]; index: number; createdTick: number; complete: boolean } | undefined;
   /** New paths asked for without getting anywhere; the move is dropped after too many. */
   repathAttempts: number;
+  /** Shots in a row that hit a rock, tree or hill before reaching what this unit is attacking. */
+  blockedShots: number;
   lastPlanX: number;
   lastPlanZ: number;
   inCollision: boolean;
@@ -163,6 +166,8 @@ const FINAL_RADIUS = 8;
 const REPATH_INTERVAL = TICKS_PER_SECOND;
 const MAX_REPATHS = 10;
 /** How many units may re-plan a path in one tick (new orders always plan at once). */
+/** After this many shots in a row are blocked, an attacking unit moves in closer. */
+export const BLOCKED_SHOTS_TO_MOVE = 3;
 const REPLANS_PER_TICK = 20;
 /** Wind generators make full power at this wind speed (RWE MaxUtilizableWindSpeed). */
 const MAX_USEFUL_WIND = 5000;
@@ -184,6 +189,8 @@ export class World {
   readonly featureDefs: Map<string, FeatureDef>;
   projectiles: Projectile[] = [];
   /** Recent things the renderer may want to show (explosions, shots, deaths); kept for a few seconds. */
+  /** Every recorded command and the tick it was given on (see issue). */
+  commandLog: { tick: number; cmd: Command }[] = [];
   events: CombatEvent[] = [];
   readonly visibility: Visibility;
   /** Players knocked out (their Commander died). */
@@ -238,9 +245,14 @@ export class World {
     });
   }
 
-  /** Queues a command for the next tick. */
-  issue(cmd: Command): void {
+  /**
+   * Queues a command for the next tick. Commands from outside the sim (the player) are recorded with
+   * their tick in `commandLog`, which is what a saved game replays; the AI's aren't, since it makes
+   * them again.
+   */
+  issue(cmd: Command, record = true): void {
     this.queue.push(cmd);
+    if (record) this.commandLog.push({ tick: this.tickCount, cmd: structuredClone(cmd) });
   }
 
   isFinished(u: SimUnit): boolean {
@@ -347,6 +359,7 @@ export class World {
       order: undefined,
       path: undefined,
       repathAttempts: 0,
+      blockedShots: 0,
       lastPlanX: x,
       lastPlanZ: z,
       inCollision: false,
@@ -390,6 +403,7 @@ export class World {
   private onFinished(u: SimUnit): void {
     u.hp = u.def.maxDamage;
     if (u.def.activateWhenBuilt) this.setActive(u, true);
+    this.events.push({ tick: this.tickCount, kind: 'complete', unitId: u.id, owner: u.owner });
   }
 
   private setActive(u: SimUnit, on: boolean): void {
@@ -555,7 +569,10 @@ export class World {
     u.nanoTarget = undefined;
     if (this.isFinished(u)) {
       if (u.factory) this.updateFactory(u);
-      else this.runTask(u);
+      else {
+        if (u.tasks.length === 0) this.engage(u);
+        this.runTask(u);
+      }
       const t = u.tasks[0];
       updateWeapons(this, u, t?.kind === 'attack' ? t.targetId : undefined);
     }
@@ -588,6 +605,36 @@ export class World {
     u.scripts?.tick();
   }
 
+  /**
+   * An idle armed unit goes after enemies it can see (like TA's "maneuver"): one in sight but out of
+   * range, or the one it's shooting at when its shots keep getting blocked. Builders and Commanders
+   * stay put. Checked about once a second per unit.
+   */
+  private engage(u: SimUnit): void {
+    if ((this.tickCount + u.id) % TICKS_PER_SECOND !== 0) return;
+    if (u.def.builder || u.def.commander || !this.canWalk(u)) return;
+    const slots = u.weapons.filter((w): w is WeaponSlot => !!w && !w.def.commandFire);
+    if (!slots.length) return;
+    const range = Math.max(...slots.map((w) => w.def.range));
+    const current = slots.map((w) => (w.target !== undefined ? this.units.get(w.target) : undefined)).find((t) => t && !t.dying);
+    if (current) {
+      if (u.blockedShots >= BLOCKED_SHOTS_TO_MOVE) u.tasks.push({ kind: 'attack', targetId: current.id, auto: true });
+      return;
+    }
+    const reach = Math.max(range + 200, u.def.sightDistance);
+    let best: SimUnit | undefined;
+    let bestD = Infinity;
+    for (const o of this.unitsInOrder()) {
+      if (o.owner === u.owner || o.dying || !this.canSee(u.owner, o)) continue;
+      const d = Math.hypot(o.x - u.x, o.z - u.z);
+      if (d <= reach && d < bestD) {
+        best = o;
+        bestD = d;
+      }
+    }
+    if (best) u.tasks.push({ kind: 'attack', targetId: best.id, auto: true });
+  }
+
   // --- tasks -------------------------------------------------------------------------
 
   private runTask(u: SimUnit): void {
@@ -616,10 +663,12 @@ export class World {
         return;
       case 'attack': {
         const target = this.units.get(t.targetId);
-        if (!target || target.dying) return this.finishTask(u);
-        // Close in until the shortest-ranged weapon reaches, then hold position and shoot.
+        if (!target || target.dying || (t.auto && !this.canSee(u.owner, target))) return this.finishTask(u);
+        // Close in until the shortest-ranged weapon reaches, then hold position and shoot. If shots keep
+        // hitting rocks, trees or hills on the way, move in much closer to get a clear shot.
         const range = Math.min(...u.weapons.filter((w): w is WeaponSlot => !!w && !w.def.commandFire).map((w) => w.def.range));
-        if (Math.hypot(target.x - u.x, target.z - u.z) > range * 0.9) this.driveTo(u, target.x, target.z);
+        const want = u.blockedShots >= BLOCKED_SHOTS_TO_MOVE ? Math.max(48, range * 0.35) : range * 0.9;
+        if (Math.hypot(target.x - u.x, target.z - u.z) > want) this.driveTo(u, target.x, target.z);
         else {
           u.order = undefined;
           u.path = undefined;
@@ -922,7 +971,7 @@ export class World {
     return [u.x + wx, u.y + wy, u.z + wz];
   }
 
-  spawnProjectile(owner: number, w: WeaponDef, from: [number, number, number], dir: [number, number, number], distance: number, targetUnit: number | undefined): void {
+  spawnProjectile(owner: number, w: WeaponDef, from: [number, number, number], dir: [number, number, number], distance: number, targetUnit: number | undefined, shooter?: number): void {
     let dieTick: number | undefined;
     if (w.timerTicks !== undefined) {
       dieTick = this.tickCount + w.timerTicks - Math.floor(w.randomDecayTicks / 2) + this.rng.int(0, w.randomDecayTicks);
@@ -944,6 +993,7 @@ export class World {
       vz: dir[2] * w.velocity,
       dieTick,
       targetUnit,
+      shooter,
       originX: from[0],
       originY: from[1],
       originZ: from[2],

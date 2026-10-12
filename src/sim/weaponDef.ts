@@ -50,6 +50,11 @@ export interface WeaponDef {
   waterExplosionArt: string;
   smokeTrail: boolean;
   toAirWeapon: boolean;
+  /** Sound names (sounds/<name>.wav): on firing, on hitting, on hitting water; soundTrigger plays the start sound once per burst. */
+  soundStart: string;
+  soundHit: string;
+  soundWater: string;
+  soundTrigger: boolean;
 }
 
 export async function loadWeaponDefs(vfs: Vfs): Promise<Map<string, WeaponDef>> {
@@ -84,8 +89,10 @@ export function parseWeaponDef(name: string, b: TdfBlock): WeaponDef {
     burst: Math.max(1, n('burst', 1)),
     burstIntervalSeconds: n('burstrate'),
     sprayAngle: n('sprayangle'),
-    tolerance: n('tolerance'),
-    pitchTolerance: n('pitchtolerance'),
+    // Unset tolerances default to 256 angle units (about 1.4°), as in RWE. With 0, a weapon that has
+    // finished aiming never fires while it or its target is moving (a walking Commander never shoots).
+    tolerance: n('tolerance', 256),
+    pitchTolerance: n('pitchtolerance', 256),
     velocity: n('weaponvelocity') / 30,
     turnRate: n('turnrate'),
     timerTicks: timer ? Math.round(timer * 30) : undefined,
@@ -106,6 +113,10 @@ export function parseWeaponDef(name: string, b: TdfBlock): WeaponDef {
     waterExplosionArt: s('waterexplosionart'),
     smokeTrail: flag('smoketrail'),
     toAirWeapon: flag('toairweapon'),
+    soundStart: s('soundstart').toLowerCase(),
+    soundHit: s('soundhit').toLowerCase(),
+    soundWater: s('soundwater').toLowerCase(),
+    soundTrigger: flag('soundtrigger'),
   };
 }
 

@@ -19,6 +19,8 @@ import { createUnitModel, type UnitModel } from './threeModel';
 interface Drawn {
   /** Carries the unit's position and heading; the model's root piece inside it is posed by scripts. */
   holder: THREE.Group;
+  /** Last tick the viewer could see this unit. */
+  seenTick: number;
   model: UnitModel;
   ring: THREE.Mesh;
   /** Whether the model currently wears the under-construction material. */
@@ -28,6 +30,8 @@ interface Drawn {
 }
 
 const MAX_SPRAYS = 256;
+/** How long (ticks) an enemy stays drawn after leaving sight; covers the gap between line-of-sight updates. */
+const SIGHT_GRACE_TICKS = 20;
 
 export class UnitRenderer {
   readonly group = new THREE.Group();
@@ -85,7 +89,12 @@ export class UnitRenderer {
         this.drawn.set(u.id, d);
         this.group.add(d.holder, d.ring);
       }
-      const visible = this.viewer === undefined || u.owner === this.viewer || (world.visibility.at(this.viewer, u.x, u.z) & 1) !== 0;
+      // Line of sight is only recomputed a couple of times a second, so a fast enemy can briefly drive
+      // into ground that hasn't been marked as seen yet. Keep showing a unit for a moment after it was
+      // last in sight, so it doesn't flicker in and out.
+      const inSight = this.viewer === undefined || u.owner === this.viewer || (world.visibility.at(this.viewer, u.x, u.z) & 1) !== 0;
+      if (inSight) d.seenTick = world.tickCount;
+      const visible = inSight || world.tickCount - d.seenTick <= SIGHT_GRACE_TICKS;
       d.holder.visible = visible;
       if (!visible) {
         d.ring.visible = false;
@@ -161,7 +170,7 @@ export class UnitRenderer {
     const model = cloneModel(template);
     const holder = new THREE.Group();
     holder.add(model.root);
-    return { holder, model, ring, nano: false, blown: new Set() };
+    return { holder, model, ring, nano: false, blown: new Set(), seenTick: -Infinity };
   }
 
   dispose(): void {
