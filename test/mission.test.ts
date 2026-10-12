@@ -12,6 +12,9 @@ describe('mission goals', () => {
     expect(missionResult(goals, [u(0, 90, 110), u(1)])).toBe('won');
     expect(missionResult(goals, [u(0)])).toBe('won');
     expect(missionResult(goals, [u(1)])).toBe('lost');
+    // A building already standing on the spot (mission 1's gate) doesn't count as getting there.
+    const gate = { owner: 0, dying: undefined, x: 100, z: 100, def: { unitName: 'ARMGATE', bmCode: 0 } };
+    expect(missionResult(goals, [gate, u(0), u(1)])).toBeUndefined();
   });
 });
 

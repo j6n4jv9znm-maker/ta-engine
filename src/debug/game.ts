@@ -225,11 +225,14 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     applyPanelArt('arm');
     weapons = await loadWeaponDefs(v);
     aiPlans = await loadAiProfile(v);
+    // Campaign mission maps belong on the Campaign tab, not in the skirmish list.
+    const campaigns = await loadCampaigns(v);
+    const missionMaps = new Set(campaigns.flatMap((c) => c.missions.map((m) => m.map.toLowerCase())));
     const maps = listMaps(v)
-      .filter((n) => !/example/i.test(n))
+      .filter((n) => !/example/i.test(n) && !missionMaps.has(n.toLowerCase()))
       .sort((a, b) => a.localeCompare(b));
     setup?.el.remove();
-    setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined, await loadCampaigns(v));
+    setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined, campaigns);
     document.body.append(setup.el);
     void dressSetupScreen(v);
     showSaves();

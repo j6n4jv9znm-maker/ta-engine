@@ -64,7 +64,8 @@ export function createSkirmish(map: GameMap, s: SkirmishSettings, seed: number, 
   if (mission) return startMission(world, map, s, deps, mission);
   const starts = map.ota?.schemas[0]?.startPositions.filter((p): p is { x: number; z: number } => !!p) ?? [];
   const home = starts[0] ?? { x: map.widthUnits / 2, z: map.heightUnits / 2 };
-  const theirs = starts[1];
+  // A map with a single start position still gets an opponent: at the far side of the map from you.
+  const theirs = starts[1] ?? farSpot(map, home);
   const other: Side = s.side === 'arm' ? 'core' : 'arm';
   const face = (z: number) => (z < map.heightUnits / 2 ? 0 : 32768);
   const ahead = (z: number) => z + (z < map.heightUnits / 2 ? 120 : -120);
@@ -139,4 +140,10 @@ export async function replayGame(world: World, save: SavedGame, onProgress?: (fr
   }
   // Commands given after the last tick (none are normally) still apply.
   while (next < cmds.length) world.issue(cmds[next++]!.cmd);
+}
+
+/** The point roughly opposite `home` across the map, kept a little in from the edges. */
+function farSpot(map: GameMap, home: { x: number; z: number }): { x: number; z: number } {
+  const clamp = (v: number, max: number) => Math.min(max - 160, Math.max(160, v));
+  return { x: clamp(map.widthUnits - home.x, map.widthUnits), z: clamp(map.heightUnits - home.z, map.heightUnits) };
 }
