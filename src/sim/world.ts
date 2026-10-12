@@ -166,6 +166,9 @@ const FINAL_RADIUS = 8;
 const REPATH_INTERVAL = TICKS_PER_SECOND;
 const MAX_REPATHS = 10;
 /** How many units may re-plan a path in one tick (new orders always plan at once). */
+/** The least water depth a floating building needs under every cell of its footprint. */
+const SHORE_DEPTH = 8;
+
 /** How far a bomber flies on past its target before turning for another pass. */
 const BOMB_RUN_LENGTH = 700;
 
@@ -303,7 +306,11 @@ export class World {
 
   /** Whether a unit of this type could stand (or be built) with its footprint's top-left at (cx, cz). */
   canPlace(def: UnitDef, cx: number, cz: number, ignore = 0): boolean {
-    return this.terrain.fits(def.ownMovement, cx, cz) && !this.occupancy.blocked(cx, cz, def.footprintX, def.footprintZ, ignore);
+    // Floating buildings (shipyards, sonar, water metal makers) may sit in shallow water by the shore,
+    // where a builder on land can reach them; their own depth limit is meant for the ships.
+    let mc = def.ownMovement;
+    if (def.bmCode === 0 && mc.minWaterDepth > SHORE_DEPTH) mc = { ...mc, minWaterDepth: SHORE_DEPTH };
+    return this.terrain.fits(mc, cx, cz) && !this.occupancy.blocked(cx, cz, def.footprintX, def.footprintZ, ignore);
   }
 
   /** Whether `unitName` can be built centred on (x, z), and the footprint cell it would use. */
