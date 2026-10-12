@@ -48,6 +48,8 @@ function unitDef(over: Partial<UnitDef> = {}): UnitAssets {
     turnRate: 900,
     canMove: true,
     canFly: false,
+    cruiseAlt: 100,
+    hoverAttack: false,
     canHover: false,
     floater: false,
     bmCode: 1,

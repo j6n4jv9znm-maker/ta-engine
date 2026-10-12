@@ -4,7 +4,7 @@ import { rotateYXZ } from './unitScripts';
 import type { WeaponDef } from './weaponDef';
 import { damageAgainst } from './weaponDef';
 import type { SimUnit, World } from './world';
-import { toRotation } from './world';
+import { toDirection, toRotation } from './world';
 
 /*
  * Weapons, projectiles and damage, following RWE (src/rwe/sim/UnitBehaviorService.cpp updateWeapon,
@@ -100,17 +100,21 @@ function updateWeapon(world: World, u: SimUnit, slot: WeaponSlot, index: WeaponI
   }
 
   // Pick (or keep) a target.
-  if (forced !== undefined && !w.commandFire) slot.target = forced;
+  if (forced !== undefined && (!w.commandFire || w.kind === 'dropped')) slot.target = forced;
   let target = slot.target !== undefined ? world.units.get(slot.target) : undefined;
-  if (!target || target.dying || !inRange(u, target, w.range) || !world.canSee(u.owner, target)) {
+  // A target given by an attack order is kept even when out of this unit's own sight (a bomber can't
+  // see far below it); others must be in sight.
+  const ordered = forced !== undefined && target?.id === forced;
+  if (!target || target.dying || !inRange(u, target, w.range) || (!ordered && !world.canSee(u.owner, target)) || !canHit(world, w, target)) {
     slot.target = undefined;
     slot.aim = undefined;
     target = undefined;
     // Look for a new target a few times a second, spread across units, rather than every tick.
-    if (!w.commandFire && (world.tickCount + u.id) % 6 === 0) target = acquire(world, u, w.range);
+    if (!w.commandFire && (world.tickCount + u.id) % 6 === 0) target = acquire(world, u, w);
     if (!target) return;
     slot.target = target.id;
   }
+  if (w.kind === 'dropped') return dropBomb(world, u, slot, target);
 
   const to = aimPoint(target);
   if (!slot.aim) {
@@ -188,11 +192,46 @@ function tryFire(world: World, u: SimUnit, slot: WeaponSlot, index: WeaponIndex)
 }
 
 /** The nearest visible enemy in range (ties broken by id, so the choice is deterministic). */
-function acquire(world: World, u: SimUnit, range: number): SimUnit | undefined {
+/**
+ * What a weapon may aim at: anti-air weapons only aircraft in flight; cannons and bombs only things on
+ * the ground (their shells can't catch a plane); lasers, guns and missiles both.
+ */
+function canHit(world: World, w: WeaponDef, t: SimUnit): boolean {
+  if (w.waterWeapon) return world.inWater(t);
+  if (world.submerged(t)) return false;
+  const air = world.airborne(t);
+  if (w.toAirWeapon) return air;
+  return !air || (w.kind !== 'ballistic' && w.kind !== 'dropped');
+}
+
+/**
+ * Bombs: released when one dropped now would land on the target, falling with the plane's speed.
+ */
+function dropBomb(world: World, u: SimUnit, slot: WeaponSlot, target: SimUnit): void {
+  if (world.tickCount < slot.readyTick) return;
+  const w = slot.def;
+  const height = Math.max(0, u.y - target.y);
+  const fall = Math.sqrt((2 * height) / GRAVITY);
+  const [fx, fz] = toDirection(u.rotation);
+  const landX = u.x + fx * u.speed * fall;
+  const landZ = u.z + fz * u.speed * fall;
+  if (Math.hypot(landX - target.x, landZ - target.z) > Math.max(24, w.damageRadius)) return;
+  world.spawnProjectile(u.owner, w, [u.x, u.y - 4, u.z], [fx, 0, fz], 0, target.id, u.id);
+  const bomb = world.projectiles[world.projectiles.length - 1]!;
+  bomb.vx = fx * u.speed;
+  bomb.vy = 0;
+  bomb.vz = fz * u.speed;
+  bomb.dieTick = undefined;
+  world.events.push({ tick: world.tickCount, kind: 'fire', unitId: u.id, weapon: w.name, x: u.x, y: u.y, z: u.z, first: true });
+  slot.readyTick = world.tickCount + Math.max(1, Math.round(w.reloadSeconds * TICKS_PER_SECOND));
+}
+
+function acquire(world: World, u: SimUnit, w: WeaponDef): SimUnit | undefined {
+  const range = w.range;
   let best: SimUnit | undefined;
   let bestD = Infinity;
   for (const o of world.unitsInOrder()) {
-    if (o.owner === u.owner || o.dying || !world.canSee(u.owner, o)) continue;
+    if (o.owner === u.owner || o.dying || !world.canSee(u.owner, o) || !canHit(world, w, o)) continue;
     const d = Math.hypot(o.x - u.x, o.z - u.z);
     if (d <= range && d < bestD) {
       best = o;
@@ -231,14 +270,18 @@ export function headingAndPitch(u: SimUnit, from: [number, number, number], to: 
 }
 
 /** Advances every projectile one tick. */
+/** Aircraft in flight this tick, for projectile hits (refreshed by updateProjectiles). */
+let airborneUnits: SimUnit[] = [];
+
 export function updateProjectiles(world: World): void {
+  airborneUnits = world.projectiles.length ? world.unitsInOrder().filter((u) => world.airborne(u)) : [];
   for (const p of world.projectiles) {
     if (p.dead) continue;
     if (p.dieTick !== undefined && world.tickCount >= p.dieTick) {
       p.dead = true;
       continue;
     }
-    if (p.weapon.kind === 'ballistic') p.vy -= GRAVITY;
+    if (p.weapon.kind === 'ballistic' || p.weapon.kind === 'dropped') p.vy -= GRAVITY;
     else if (p.weapon.kind === 'tracking' && p.targetUnit !== undefined) {
       const t = world.units.get(p.targetUnit);
       if (!t || t.dying) p.targetUnit = undefined;
@@ -262,7 +305,7 @@ function collide(world: World, p: Projectile): void {
     return;
   }
   const ground = terrain.heightAt(p.x, p.z);
-  if (ground < terrain.seaLevel && p.y <= terrain.seaLevel) return impact(world, p, true);
+  if (ground < terrain.seaLevel && p.y <= terrain.seaLevel && !p.weapon.waterWeapon) return impact(world, p, true);
   // Straight shots skim small bumps instead of stopping in the dirt just in front of the target.
   const skim = p.weapon.kind === 'ballistic' ? 0 : GROUND_SKIM;
   if (p.y <= ground - skim) {
@@ -272,6 +315,14 @@ function collide(world: World, p: Projectile): void {
       return;
     }
     return impact(world, p, false);
+  }
+  // Shots that can hit aircraft hit those they pass close to (aircraft aren't on the ground grid).
+  if (p.weapon.kind !== 'ballistic' && p.weapon.kind !== 'dropped') {
+    for (const u of airborneUnits) {
+      if (u.owner === p.owner || u.dying) continue;
+      const reach = Math.max(u.def.footprintX, u.def.footprintZ) * 8 + 4;
+      if (Math.abs(u.x - p.x) < reach && Math.abs(u.z - p.z) < reach && Math.abs(u.y + u.height / 2 - p.y) < reach) return impact(world, p, false);
+    }
   }
   const cx = Math.floor(p.x / 16);
   const cz = Math.floor(p.z / 16);

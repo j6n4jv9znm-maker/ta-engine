@@ -30,6 +30,8 @@ function def(over: Partial<UnitDef>): UnitAssets {
     turnRate: 2000,
     canMove: true,
     canFly: false,
+    cruiseAlt: 100,
+    hoverAttack: false,
     canHover: false,
     floater: false,
     bmCode: 1,

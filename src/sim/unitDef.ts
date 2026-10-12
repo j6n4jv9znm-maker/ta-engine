@@ -33,6 +33,10 @@ export interface UnitDef {
   turnRate: number;
   canMove: boolean;
   canFly: boolean;
+  /** Flying height above the ground (aircraft). */
+  cruiseAlt: number;
+  /** Aircraft that hover while attacking (gunships) rather than making bombing runs. */
+  hoverAttack: boolean;
   canHover: boolean;
   floater: boolean;
   /** 1 for mobile units, 0 for buildings. */
@@ -137,6 +141,8 @@ export function parseUnitDef(fbi: TdfBlock, movementClasses: Map<string, Movemen
     turnRate: n('turnrate'),
     canMove: n('canmove') !== 0,
     canFly: n('canfly') !== 0,
+    cruiseAlt: n('cruisealt', 100),
+    hoverAttack: n('hoverattack') !== 0,
     canHover: n('canhover') !== 0,
     floater: n('floater') !== 0,
     bmCode: n('bmcode'),

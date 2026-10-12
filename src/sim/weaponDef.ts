@@ -10,7 +10,8 @@ import type { Vfs } from '../vfs';
  * weapons too.
  */
 
-export type ProjectileKind = 'lineOfSight' | 'ballistic' | 'tracking';
+/** `dropped`: a bomb, released from an aircraft and falling with the aircraft's speed. */
+export type ProjectileKind = 'lineOfSight' | 'ballistic' | 'tracking' | 'dropped';
 
 export interface WeaponDef {
   name: string;
@@ -50,6 +51,8 @@ export interface WeaponDef {
   waterExplosionArt: string;
   smokeTrail: boolean;
   toAirWeapon: boolean;
+  /** Torpedoes and depth charges: travel through water and only hit things in it. */
+  waterWeapon: boolean;
   /** Sound names (sounds/<name>.wav): on firing, on hitting, on hitting water; soundTrigger plays the start sound once per burst. */
   soundStart: string;
   soundHit: string;
@@ -78,7 +81,7 @@ export function parseWeaponDef(name: string, b: TdfBlock): WeaponDef {
   const damage = new Map<string, number>();
   const dmg = getBlock(b, 'damage');
   if (dmg) for (const [k, v] of Object.entries(dmg)) if (typeof v === 'string') damage.set(k.toLowerCase(), Number.parseFloat(v) || 0);
-  const kind: ProjectileKind = flag('tracks') ? 'tracking' : flag('lineofsight') ? 'lineOfSight' : flag('ballistic') ? 'ballistic' : 'lineOfSight';
+  const kind: ProjectileKind = flag('dropped') ? 'dropped' : flag('tracks') ? 'tracking' : flag('lineofsight') ? 'lineOfSight' : flag('ballistic') ? 'ballistic' : 'lineOfSight';
   const timer = n('weapontimer');
   return {
     name,
@@ -113,6 +116,7 @@ export function parseWeaponDef(name: string, b: TdfBlock): WeaponDef {
     waterExplosionArt: s('waterexplosionart'),
     smokeTrail: flag('smoketrail'),
     toAirWeapon: flag('toairweapon'),
+    waterWeapon: flag('waterweapon'),
     soundStart: s('soundstart').toLowerCase(),
     soundHit: s('soundhit').toLowerCase(),
     soundWater: s('soundwater').toLowerCase(),
