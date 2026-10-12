@@ -1,4 +1,5 @@
 import type { GameMap } from '../map/mapData';
+import type { Mission } from '../map/mission';
 import type { FeatureDef } from '../map/features';
 import type { AiPlan, Difficulty } from './ai/aiProfile';
 import { SkirmishAi } from './ai/skirmishAi';
@@ -18,6 +19,8 @@ export interface SkirmishSettings {
   side: Side;
   opponent: Difficulty | 'none';
   startWith: 'commander' | 'army';
+  /** For a campaign mission: its map name (then `map` is the same and `startWith` is ignored). */
+  mission?: string;
 }
 
 export interface SkirmishDeps {
@@ -56,8 +59,9 @@ export interface Skirmish {
   home: { x: number; z: number };
 }
 
-export function createSkirmish(map: GameMap, s: SkirmishSettings, seed: number, deps: SkirmishDeps): Skirmish {
+export function createSkirmish(map: GameMap, s: SkirmishSettings, seed: number, deps: SkirmishDeps, mission?: Mission): Skirmish {
   const world = new World(map, { seed, assets: deps.assets, weapons: deps.weapons, featureDefs: deps.featureDefs });
+  if (mission) return startMission(world, map, s, deps, mission);
   const starts = map.ota?.schemas[0]?.startPositions.filter((p): p is { x: number; z: number } => !!p) ?? [];
   const home = starts[0] ?? { x: map.widthUnits / 2, z: map.heightUnits / 2 };
   const theirs = starts[1];
@@ -73,6 +77,20 @@ export function createSkirmish(map: GameMap, s: SkirmishSettings, seed: number, 
     if (s.startWith === 'army') spawnGroup(world, deps, ARMIES[other], 1, theirs.x, ahead(theirs.z));
   }
   if (s.opponent !== 'none') world.ais.push(new SkirmishAi(1, s.opponent, deps.menus, deps.aiPlans.get(s.opponent), 977));
+  return { world, home };
+}
+
+/** A campaign mission: the units the mission places, and the computer playing the other side. */
+function startMission(world: World, map: GameMap, s: SkirmishSettings, deps: SkirmishDeps, mission: Mission): Skirmish {
+  for (const m of mission.units) {
+    const a = deps.assets(m.unitName.toLowerCase());
+    if (!a) continue;
+    const u = world.spawn(a, m.owner, m.x, m.z, Math.round(m.angle) & 0xffff);
+    if (u && m.health < 100) u.hp = Math.max(1, (u.def.maxDamage * m.health) / 100);
+  }
+  if (s.opponent !== 'none') world.ais.push(new SkirmishAi(1, s.opponent, deps.menus, deps.aiPlans.get(s.opponent), 977));
+  const mine = mission.units.filter((u) => u.owner === HUMAN);
+  const home = mine.length ? { x: mine.reduce((a, u) => a + u.x, 0) / mine.length, z: mine.reduce((a, u) => a + u.z, 0) / mine.length } : { x: map.widthUnits / 2, z: map.heightUnits / 2 };
   return { world, home };
 }
 

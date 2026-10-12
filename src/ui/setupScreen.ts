@@ -4,6 +4,7 @@ import type { Palette } from '../formats/palette';
 import { parseTdf } from '../formats/tdf';
 import { parseTnt, type TntMap } from '../formats/tnt';
 import type { SkirmishSettings } from '../sim/skirmish';
+import { loadMission, type Campaign } from '../map/mission';
 import type { Vfs } from '../vfs';
 
 /*
@@ -39,6 +40,7 @@ export class SetupScreen {
     private readonly maps: string[],
     private readonly onStart: (s: GameSettings) => void,
     private readonly onResume: () => void,
+    private readonly campaigns: Campaign[] = [],
   ) {
     const saved = load();
     const preferred = ['Ashap Plateau', 'The Pass'].find((n) => maps.includes(n)) ?? maps[0] ?? '';
@@ -55,7 +57,7 @@ export class SetupScreen {
       <div class="setup-box">
         <h1>Total Annihilation</h1>
         <div class="setup-cols">
-          <div class="setup-maps"><h2>Map</h2><div class="setup-list"></div></div>
+          <div class="setup-maps"><div class="choice setup-mode"><button data-mode="skirmish">Skirmish</button><button data-mode="campaign">Campaign</button></div><div class="setup-list"></div></div>
           <div class="setup-preview"><canvas></canvas><div class="setup-details"></div></div>
           <div class="setup-options">
             <h2>You play</h2>
@@ -81,13 +83,10 @@ export class SetupScreen {
     this.resumeBtn = this.el.querySelector('.resume')!;
     this.extra = this.el.querySelector('.setup-extra')!;
 
-    for (const name of maps) {
-      const b = document.createElement('button');
-      b.textContent = name;
-      b.dataset.map = name;
-      b.addEventListener('click', () => this.pickMap(name));
-      this.list.append(b);
+    for (const b of this.el.querySelectorAll<HTMLButtonElement>('.setup-mode button')) {
+      b.addEventListener('click', () => this.showList(b.dataset.mode === 'campaign'));
     }
+    this.showList(!!this.settings.mission);
     for (const group of this.el.querySelectorAll<HTMLElement>('.choice')) {
       const key = group.dataset.key as keyof GameSettings;
       for (const b of group.querySelectorAll<HTMLButtonElement>('button')) {
@@ -108,7 +107,56 @@ export class SetupScreen {
     });
     this.extra.hidden = false;
     this.refresh();
-    this.pickMap(this.settings.map);
+    if (this.settings.mission) this.pickMission(this.settings.mission);
+    else this.pickMap(this.settings.map);
+  }
+
+  /** Fills the left list with skirmish maps, or with the campaigns' missions in order. */
+  private showList(campaign: boolean): void {
+    this.list.textContent = '';
+    for (const b of this.el.querySelectorAll<HTMLButtonElement>('.setup-mode button')) b.classList.toggle('on', (b.dataset.mode === 'campaign') === campaign);
+    if (!campaign) {
+      for (const name of this.maps) {
+        const b = document.createElement('button');
+        b.textContent = name;
+        b.dataset.map = name;
+        b.addEventListener('click', () => this.pickMap(name));
+        this.list.append(b);
+      }
+      if (this.settings.mission) this.pickMap(this.maps.includes(this.settings.map) ? this.settings.map : (this.maps[0] ?? ''));
+      return;
+    }
+    for (const c of this.campaigns) {
+      const h = document.createElement('h2');
+      h.textContent = c.name;
+      this.list.append(h);
+      for (const m of c.missions) {
+        const b = document.createElement('button');
+        b.textContent = m.name;
+        b.dataset.map = m.map;
+        b.addEventListener('click', () => this.pickMission(m.map));
+        this.list.append(b);
+      }
+    }
+    if (!this.settings.mission && this.campaigns[0]?.missions[0]) this.pickMission(this.campaigns[0].missions[0].map);
+  }
+
+  /** A campaign mission: you play its side; the preview shows its map and the briefing. */
+  private pickMission(map: string): void {
+    const c = this.campaigns.find((x) => x.missions.some((m) => m.map === map));
+    if (!c) return;
+    this.settings.mission = map;
+    this.settings.map = map;
+    this.settings.side = c.side;
+    this.refresh();
+    const ticket = ++this.shown;
+    this.details.textContent = 'Loading…';
+    void Promise.all([this.mapInfo(map), loadMission(this.vfs, map).catch(() => undefined)]).then(([info, mission]) => {
+      if (ticket !== this.shown) return;
+      this.drawPreview(info, false);
+      const name = c.missions.find((m) => m.map === map)?.name ?? map;
+      this.details.innerHTML = [`<b>${escape(name)}</b>`, escape((mission?.briefing ?? '').replace(/&[A-Za-z]?/g, '')).replace(/\n/g, '<br>')].filter(Boolean).join('<br><br>');
+    });
   }
 
   /** A spot under the Start button for extra actions (saved games). */
@@ -140,6 +188,7 @@ export class SetupScreen {
 
   private pickMap(name: string): void {
     this.settings.map = name;
+    this.settings.mission = undefined;
     this.refresh();
     const ticket = ++this.shown;
     this.details.textContent = 'Loading…';
@@ -184,7 +233,7 @@ export class SetupScreen {
     return p;
   }
 
-  private drawPreview(info: MapInfo | undefined): void {
+  private drawPreview(info: MapInfo | undefined, starts = true): void {
     const c = this.preview;
     const g = c.getContext('2d')!;
     if (!info) {
@@ -206,6 +255,7 @@ export class SetupScreen {
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     // You start at position 1 and the computer at 2; the others are only shown faintly.
+    if (!starts) return; // missions place their own units
     [...info.starts.entries()].reverse().forEach(([i, s]) => {
       const x = s.x * sx;
       const y = s.z * sz;

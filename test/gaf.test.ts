@@ -150,7 +150,7 @@ describe.skipIf(!hasGameData())('GAF decoder (your game files)', () => {
       }
     }
     expect(frames).toBeGreaterThan(10000);
-  });
+  }, 60_000); // reads every GAF in every archive; slow when other tests run alongside
 
   it('loads model textures and 10 team colours for each logo texture', async () => {
     const lib = await loadTextureLibrary(vfs, pal);

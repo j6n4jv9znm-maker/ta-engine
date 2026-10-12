@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "ta": "tsx tools/ta.ts",
     "app": "tauri dev",
-    "app:build": "tauri build --bundles app"
+    "app:build": "tauri build --bundles app && tsx tools/appIcon.ts",
+    "app:icon": "tsx tools/appIcon.ts"
   },
   "author": "",
   "license": "UNLICENSED",
