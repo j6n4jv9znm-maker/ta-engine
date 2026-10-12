@@ -237,7 +237,8 @@ describe.skipIf(!hasGameData())('world simulation (your game files)', () => {
     w.issue({ kind: 'move', unitIds: ids, x: b!.x, z: b!.z });
     run(w, 30 * 300);
     const units = [...w.units.values()];
-    const arrived = units.filter((u) => Math.hypot(u.x - b!.x, u.z - b!.z) < 200);
+    // A group spawned on one spot spreads into a block at the destination, so 'there' is a wider circle.
+    const arrived = units.filter((u) => Math.hypot(u.x - b!.x, u.z - b!.z) < 260);
     expect(arrived.length).toBe(24);
     expect(units.flatMap((u) => u.scripts?.vm.errors ?? [])).toEqual([]);
   }, 120_000);
