@@ -696,6 +696,17 @@ window.addEventListener('keydown', (e) => {
   }
   const k = e.key.toLowerCase();
   if (k === 's' && selected.size && !(e.ctrlKey || e.metaKey)) game.world.issue({ kind: 'stop', unitIds: [...selected] });
+  // Ctrl+C: select your Commander and look at it, as in TA.
+  if (k === 'c' && (e.ctrlKey || e.metaKey) && !window.getSelection()?.toString()) {
+    const com = [...game.world.units.values()].find((u) => u.owner === ME && u.def.commander && !u.dying);
+    if (com) {
+      e.preventDefault();
+      selected.clear();
+      selected.add(com.id);
+      rts.lookAt(com.x, com.z);
+      refreshPanel();
+    }
+  }
   // Ctrl+D: self-destruct (again to cancel), as in TA. The way to get rid of your own buildings.
   if (k === 'd' && (e.ctrlKey || e.metaKey) && selected.size) {
     e.preventDefault();
