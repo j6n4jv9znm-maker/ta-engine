@@ -231,6 +231,7 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     setup?.el.remove();
     setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined, await loadCampaigns(v));
     document.body.append(setup.el);
+    void dressSetupScreen(v);
     showSaves();
     setup.show(false);
     progress.disconnect();
@@ -843,6 +844,39 @@ function refreshPanel(): void {
     grid.append(b);
   }
   buildEl.append(grid);
+}
+
+/**
+ * Gives the start screen TA's own look from the player's files: the metal title-screen background
+ * and the TOTAL ANNIHILATION logo in place of the plain heading.
+ */
+async function dressSetupScreen(v: Vfs): Promise<void> {
+  const pcx = async (name: string) => {
+    const f = v.listDir('bitmaps', '.pcx').find((x) => x.path.toLowerCase() === `bitmaps/${name}`);
+    return f ? parsePcx(await v.read(f.path)) : undefined;
+  };
+  const toUrl = (img: { width: number; height: number; rgba: Uint8Array }, crop = { x: 0, y: 0, w: img.width, h: img.height }) => {
+    const c = document.createElement('canvas');
+    c.width = crop.w;
+    c.height = crop.h;
+    c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(img.rgba), img.width, img.height), -crop.x, -crop.y);
+    return c.toDataURL();
+  };
+  try {
+    const bg = await pcx('frontbg.pcx');
+    if (bg && setup) setup.el.style.background = `#050805 url(${toUrl(bg)}) center / cover`;
+    const title = await pcx('frontend1f.pcx');
+    const heading = setup?.el.querySelector('.setup-box h1');
+    if (title && heading) {
+      const logo = document.createElement('img');
+      logo.src = toUrl(title, { x: 66, y: 24, w: 524, h: 300 });
+      logo.alt = 'Total Annihilation';
+      logo.className = 'setup-logo';
+      heading.replaceWith(logo);
+    }
+  } catch {
+    // keep the plain look
+  }
 }
 
 /** The saved-games list on the setup screen. */
