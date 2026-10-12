@@ -74,11 +74,15 @@ describe.skipIf(!hasGameData())('skirmish AI (your game files)', () => {
     w.spawn(assets.get('corcom')!, 1, st[1]!.x, st[1]!.z);
     w.ais.push(new SkirmishAi(0, 'medium', menus, plans.get('medium'), 1), new SkirmishAi(1, 'medium', menus, plans.get('medium'), 2));
     let builtFactory = false;
+    let builtPlane = false;
     for (let t = 0; t < 30 * 60 * 30 && w.defeated.size === 0; t++) {
       w.tick();
       if (!builtFactory) builtFactory = [...w.units.values()].some((u) => u.factory && w.isFinished(u));
+      if (!builtPlane && t % 300 === 0) builtPlane = [...w.units.values()].some((u) => u.def.canFly && w.isFinished(u));
     }
     expect(builtFactory).toBe(true);
+    // Above easy, it adds an aircraft plant once its land factories are up.
+    expect(builtPlane).toBe(true);
     expect(w.defeated.size).toBe(1);
     expect([...w.units.values()].flatMap((u) => u.scripts?.vm.errors ?? [])).toEqual([]);
   }, 300_000);

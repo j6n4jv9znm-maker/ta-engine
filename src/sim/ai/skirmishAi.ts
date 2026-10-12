@@ -14,11 +14,12 @@ import { limitOf, profileKeys, weightOf, type AiPlan, type Difficulty } from './
  *      (solar or wind, whichever this map favours) when energy runs short, and storage when full.
  *   2. Production: builds a Kbot Lab or Vehicle Plant (and more later), and keeps every factory busy:
  *      a few construction units, then combat units picked at random, weighted and capped by TA's own AI
- *      profile for this difficulty (ai/DEFAULT.TXT). Factories that make aircraft or ships are skipped
- *      until those movement types exist.
+ *      profile for this difficulty (ai/DEFAULT.TXT). With room for a second factory it adds an aircraft
+ *      plant, and on maps with water near its base a shipyard.
  *   3. Defence: if enemies come near the base, everything idle goes after them.
  *   4. Attack: once enough idle combat units have gathered, they go in a wave towards the nearest enemy
- *      it knows about (seen units, or the other start positions). Waves grow over time.
+ *      it knows about (seen units, or the other start positions). Waves grow over time. Planes go in
+ *      their own smaller groups straight at what they know of, and ships hunt along the water.
  *
  * Difficulty changes how often it thinks, how big waves are, how many builders it keeps, and which
  * profile plan it follows.
@@ -55,6 +56,7 @@ export class SkirmishAi {
   private armyMovement: MovementClass | undefined;
   /** Building jobs handed out but not yet started, so two builders don't pick the same spot. */
   private claimed = new Map<number, { x: number; z: number; tick: number }>();
+  private hasWater: boolean | undefined;
 
   constructor(
     readonly player: number,
@@ -92,12 +94,15 @@ export class SkirmishAi {
 
     const builders = finished.filter((u) => u.def.builder && u.def.bmCode !== 0 && this.menus.has(u.def.unitName.toLowerCase()));
     const factories = finished.filter((u) => u.factory);
-    const army = finished.filter((u) => isCombat(u.def) && !u.def.commander);
+    const fighters = finished.filter((u) => isCombat(u.def) && !u.def.commander);
+    const army = fighters.filter((u) => isLandCombat(u.def));
 
-    this.defend(world, army, commander);
+    this.defend(world, fighters, commander);
     for (const b of builders) if (b.tasks.length === 0) this.useBuilder(world, b, mine, factories);
     for (const f of factories) this.useFactory(world, f, mine);
     this.attackWave(world, army);
+    this.airRaids(world, fighters.filter((u) => isAirCombat(u.def)));
+    this.seaHunt(world, fighters.filter((u) => isSeaCombat(u.def)));
   }
 
   // --- economy and base building ---------------------------------------------------------
@@ -127,9 +132,18 @@ export class SkirmishAi {
       }
     }
     // Factories.
-    if (factories.length < this.tuning.factories && s.metal.stock > 150) {
-      const plant = this.weighted(options.filter((d) => isUsableFactory(world, d, this.menus) && this.allowed(d, mine)));
-      if (plant && count((d) => isUsableFactory(world, d, this.menus)) <= factories.length && this.buildNear(world, b, plant, 3)) return;
+    // Land factories first; then (above easy) an aircraft plant, and a shipyard if there's water near
+    // the base. These come on top of the land factories so the main army doesn't shrink.
+    const kinds = factories.map((f) => factoryKind(world, f.def, this.menus));
+    const land = kinds.filter((k) => k === 'land').length;
+    const wants: FactoryKind[] =
+      land < this.tuning.factories ? ['land'] : this.difficulty === 'easy' ? [] : [...(!kinds.includes('sea') && this.waterNearBase(world) ? (['sea'] as const) : []), ...(!kinds.includes('air') ? (['air'] as const) : [])];
+    // (With a steady metal income it starts one even when the stock is spent, or a busy hard AI never would.)
+    if (wants.length && (s.metal.stock > 150 || s.metal.income > 8) && count((d) => factoryKind(world, d, this.menus) !== undefined) <= factories.length) {
+      for (const want of wants) {
+        const plant = this.weighted(options.filter((d) => factoryKind(world, d, this.menus) === want && this.allowed(d, mine)));
+        if (plant && this.buildNear(world, b, plant, want === 'sea' ? 0 : 3)) return;
+      }
     }
     // Storage when full.
     if (s.metal.stock > s.metal.storage * 0.9) {
@@ -230,7 +244,7 @@ export class SkirmishAi {
     const builders = mine.filter((u) => u.def.builder && u.def.bmCode !== 0 && !u.def.commander).length;
     let choice: UnitDef | undefined;
     if (builders < this.tuning.constructors) {
-      choice = this.cheapest(options.filter((d) => d.builder && d.bmCode !== 0 && !d.canFly && this.allowed(d, mine)));
+      choice = this.cheapest(options.filter((d) => d.builder && d.bmCode !== 0 && isLandUnit(d) && this.allowed(d, mine)));
     }
     choice ??= this.weighted(options.filter((d) => isCombat(d) && this.allowed(d, mine)));
     if (!choice) return;
@@ -292,6 +306,53 @@ export class SkirmishAi {
     this.issue(world, { kind: 'move', unitIds: idle.map((u) => u.id), x: target.x, z: target.z });
   }
 
+  /**
+   * Planes: once a few are waiting, send them at the nearest enemy we can see (bombers need an attack
+   * order to drop), else towards where the enemy started.
+   */
+  private airRaids(world: World, planes: SimUnit[]): void {
+    const idle = planes.filter((u) => u.tasks.length === 0);
+    if (idle.length < Math.max(3, Math.floor(this.tuning.firstWave / 2))) return;
+    const seen = world.unitsInOrder().filter((e) => e.owner !== this.player && !e.dying && world.canSee(this.player, e));
+    for (const u of idle) {
+      const target = nearest(seen.filter((e) => e.def.bmCode === 0), u) ?? nearest(seen, u);
+      if (target) this.issue(world, { kind: 'attack', unitIds: [u.id], targetId: target.id });
+      else {
+        const next = this.attackTarget(world, u);
+        if (next) this.issue(world, { kind: 'move', unitIds: [u.id], x: next.x, z: next.z });
+      }
+    }
+  }
+
+  /** Ships go after enemies they can see near the water, else sail towards the enemy's side. */
+  private seaHunt(world: World, ships: SimUnit[]): void {
+    const idle = ships.filter((u) => u.tasks.length === 0);
+    if (idle.length < 2) return;
+    const seen = world.unitsInOrder().filter((e) => e.owner !== this.player && !e.dying && world.canSee(this.player, e));
+    for (const u of idle) {
+      const target = nearest(seen, u, 1500);
+      if (target) this.issue(world, { kind: 'attack', unitIds: [u.id], targetId: target.id });
+      else {
+        const next = this.attackTarget(world, u);
+        // The path planner takes them to the water nearest that point.
+        if (next) this.issue(world, { kind: 'move', unitIds: [u.id], x: next.x, z: next.z });
+      }
+    }
+  }
+
+  /** Whether there's open water within building distance of the base. */
+  private waterNearBase(world: World): boolean {
+    if (this.hasWater === undefined) {
+      const t = world.terrain;
+      const base = this.base!;
+      let wet = 0;
+      for (let dz = -BASE_RADIUS; dz <= BASE_RADIUS; dz += 32)
+        for (let dx = -BASE_RADIUS; dx <= BASE_RADIUS; dx += 32) if (t.heightAt(base.x + dx, base.z + dz) < t.seaLevel - 20) wet++;
+      this.hasWater = wet > 40;
+    }
+    return this.hasWater;
+  }
+
   /** The nearest enemy we know of: a seen unit (buildings first), else another start position. */
   private attackTarget(world: World, from: SimUnit): { x: number; z: number } | undefined {
     const seen = world.unitsInOrder().filter((e) => e.owner !== this.player && !e.dying && world.canSee(this.player, e));
@@ -322,7 +383,7 @@ export class SkirmishAi {
       for (const n of (this.menus.get(name) ?? []).flat()) {
         const d = world.assetsOf(n)?.def;
         if (!d) continue;
-        if (isCombat(d)) classes.push(d.movementClass);
+        if (isLandCombat(d)) classes.push(d.movementClass);
         if (d.builder && seen.size < 12) queue.push(n.toLowerCase());
       }
     }
@@ -361,18 +422,40 @@ export class SkirmishAi {
   }
 }
 
+const isShip = (d: UnitDef) => !d.canFly && (d.movementClass.minWaterDepth > 0 || d.ownMovement.minWaterDepth > 0);
+const isLandUnit = (d: UnitDef) => !d.canFly && !isShip(d);
+const armed = (d: UnitDef) => d.bmCode !== 0 && !d.builder && d.maxVelocity > 0 && d.weapons.some((w) => w !== '');
+
 /** A mobile ground unit with a weapon it fires on its own. */
+export function isLandCombat(d: UnitDef): boolean {
+  return armed(d) && isLandUnit(d);
+}
+export function isAirCombat(d: UnitDef): boolean {
+  return armed(d) && d.canFly;
+}
+export function isSeaCombat(d: UnitDef): boolean {
+  return armed(d) && isShip(d);
+}
+/** Any armed mobile unit: land, air or sea. */
 export function isCombat(d: UnitDef): boolean {
-  return d.bmCode !== 0 && !d.builder && !d.canFly && d.maxVelocity > 0 && d.movementClass.minWaterDepth === 0 && d.weapons.some((w) => w !== '');
+  return armed(d);
 }
 
-/** A factory on land whose products are mostly ground units (aircraft and ships come later). */
-function isUsableFactory(world: World, d: UnitDef, menus: BuildMenus): boolean {
-  if (!d.builder || d.bmCode !== 0 || d.ownMovement.minWaterDepth > 0) return false;
+type FactoryKind = 'land' | 'air' | 'sea';
+
+/** What a factory mostly makes: ground units, aircraft or ships (undefined if it isn't a factory). */
+function factoryKind(world: World, d: UnitDef, menus: BuildMenus): FactoryKind | undefined {
+  if (!d.builder || d.bmCode !== 0) return undefined;
   const products = (menus.get(d.unitName.toLowerCase())?.flat() ?? []).map((n) => world.assetsOf(n)?.def).filter((x): x is UnitDef => !!x);
-  if (products.length === 0) return false;
-  const ground = products.filter((p) => !p.canFly && p.ownMovement.minWaterDepth === 0 && p.movementClass.minWaterDepth === 0);
-  return ground.length * 2 > products.length;
+  if (products.length === 0) return undefined;
+  const air = products.filter((p) => p.canFly).length;
+  const sea = products.filter(isShip).length;
+  const land = products.length - air - sea;
+  // A factory that itself floats is a shipyard (or a seaplane platform, which we leave out).
+  if (d.ownMovement.minWaterDepth > 0) return sea * 2 > products.length ? 'sea' : undefined;
+  if (land * 2 > products.length) return 'land';
+  if (air * 2 > products.length) return 'air';
+  return undefined;
 }
 
 function nearest(list: SimUnit[], from: SimUnit, maxDistance = Infinity): SimUnit | undefined {
