@@ -132,12 +132,18 @@ export class SkirmishAi {
       }
     }
     // Factories.
-    if (factories.length < this.tuning.factories && s.metal.stock > 150 && count((d) => factoryKind(world, d, this.menus) !== undefined) <= factories.length) {
-      // First a land factory; then a shipyard if there's water near the base, and an aircraft plant.
-      const kinds = factories.map((f) => factoryKind(world, f.def, this.menus));
-      const want: FactoryKind = !kinds.includes('land') ? 'land' : !kinds.includes('sea') && this.waterNearBase(world) ? 'sea' : !kinds.includes('air') ? 'air' : 'land';
-      const plant = this.weighted(options.filter((d) => factoryKind(world, d, this.menus) === want && this.allowed(d, mine)));
-      if (plant && this.buildNear(world, b, plant, want === 'sea' ? 0 : 3)) return;
+    // Land factories first; then (above easy) an aircraft plant, and a shipyard if there's water near
+    // the base. These come on top of the land factories so the main army doesn't shrink.
+    const kinds = factories.map((f) => factoryKind(world, f.def, this.menus));
+    const land = kinds.filter((k) => k === 'land').length;
+    const wants: FactoryKind[] =
+      land < this.tuning.factories ? ['land'] : this.difficulty === 'easy' ? [] : [...(!kinds.includes('sea') && this.waterNearBase(world) ? (['sea'] as const) : []), ...(!kinds.includes('air') ? (['air'] as const) : [])];
+    // (With a steady metal income it starts one even when the stock is spent, or a busy hard AI never would.)
+    if (wants.length && (s.metal.stock > 150 || s.metal.income > 8) && count((d) => factoryKind(world, d, this.menus) !== undefined) <= factories.length) {
+      for (const want of wants) {
+        const plant = this.weighted(options.filter((d) => factoryKind(world, d, this.menus) === want && this.allowed(d, mine)));
+        if (plant && this.buildNear(world, b, plant, want === 'sea' ? 0 : 3)) return;
+      }
     }
     // Storage when full.
     if (s.metal.stock > s.metal.storage * 0.9) {
