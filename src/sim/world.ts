@@ -51,6 +51,8 @@ export type Task =
 export type Command =
   | { kind: 'move'; unitIds: number[]; x: number; z: number; queue?: boolean }
   | { kind: 'stop'; unitIds: number[] }
+  /** TA's Ctrl+D: blow the units up after a 5 second countdown; given again, it cancels. */
+  | { kind: 'selfDestruct'; unitIds: number[] }
   | { kind: 'build'; unitId: number; unitName: string; x: number; z: number; queue?: boolean }
   | { kind: 'assist'; unitIds: number[]; targetId: number; queue?: boolean }
   | { kind: 'reclaim'; unitIds: number[]; featureId: number; queue?: boolean }
@@ -112,6 +114,8 @@ export interface SimUnit {
   path: { waypoints: [number, number][]; index: number; createdTick: number; complete: boolean } | undefined;
   /** New paths asked for without getting anywhere; the move is dropped after too many. */
   repathAttempts: number;
+  /** The tick a self-destruct countdown ends, if one is running. */
+  selfDestructAt?: number;
   /** Shots in a row that hit a rock, tree or hill before reaching what this unit is attacking. */
   blockedShots: number;
   lastPlanX: number;
@@ -129,8 +133,11 @@ export interface SimUnit {
   rally: [number, number] | undefined;
   /** What the unit is spraying its nano-lathe at this tick (for drawing), if anything. */
   nanoTarget: { x: number; y: number; z: number } | undefined;
-  /** The piece the spray comes from (its QueryNanoPiece answer), looked up the first time it builds. */
-  nanoPiece: string | null | undefined;
+  /**
+   * The pieces the spray comes from: QueryNanoPiece's answers, asked a few times the first time it
+   * builds (factories and many builders cycle through several nozzles, so the spray comes from all sides).
+   */
+  nanoPieces: string[] | undefined;
   /** Whether the yard (if any) was open last time we updated its passable cells. */
   yardOpen: boolean;
   /** The factory a newly built unit is driving out of; its walls don't block it until it's out. */
@@ -166,6 +173,12 @@ const FINAL_RADIUS = 8;
 const REPATH_INTERVAL = TICKS_PER_SECOND;
 const MAX_REPATHS = 10;
 /** How many units may re-plan a path in one tick (new orders always plan at once). */
+/** How many times to ask a unit's script for its nano nozzles (they usually cycle through up to four). */
+const MAX_NANO_PIECES = 8;
+
+/** How long a self-destruct countdown lasts (TA's 5 seconds). */
+const SELF_DESTRUCT_TICKS = 5 * TICKS_PER_SECOND;
+
 /** The least water depth a floating building needs under every cell of its footprint. */
 const SHORE_DEPTH = 8;
 
@@ -205,6 +218,7 @@ export class World {
   readonly ais: { update(world: World): void }[] = [];
   tickCount = 0;
   windSpeed = 0;
+  windDirection = 0;
   private nextProjectileId = 1;
   /** Re-plans allowed this tick; units over budget keep their old path a little longer. */
   private replanBudget = 0;
@@ -380,7 +394,7 @@ export class World {
       factory: isFactory ? { queue: [], currentId: undefined, leavingId: undefined, leavingSince: 0, released: 0, phase: 'idle', waited: 0 } : undefined,
       rally: undefined,
       nanoTarget: undefined,
-      nanoPiece: undefined,
+      nanoPieces: undefined,
       yardOpen: false,
       exitFactory: undefined,
       height: modelHeight(assets.model),
@@ -413,6 +427,10 @@ export class World {
 
   private onFinished(u: SimUnit): void {
     u.hp = u.def.maxDamage;
+    // Metal extractors spin as fast as there is metal under them, and wind generators turn in the
+    // wind: their scripts take that through SetSpeed (and SetDirection), as RWE does.
+    if (u.def.extractsMetal && u.scripts) u.scripts.start('SetSpeed', [Math.round(this.metalUnder(u))]);
+    if (u.def.windGenerator && u.scripts) this.tellWind(u);
     if (u.def.activateWhenBuilt) this.setActive(u, true);
     this.events.push({ tick: this.tickCount, kind: 'complete', unitId: u.id, owner: u.owner });
   }
@@ -444,6 +462,7 @@ export class World {
       u.prevZ = u.z;
       u.prevRotation = u.rotation;
       if (u.dying) this.updateDying(u);
+      else if (u.selfDestructAt !== undefined && this.tickCount >= u.selfDestructAt) this.kill(u, 100, true);
       else this.updateUnit(u);
     }
     updateProjectiles(this);
@@ -467,6 +486,11 @@ export class World {
 
   private apply(c: Command): void {
     switch (c.kind) {
+      case 'selfDestruct':
+        for (const u of this.ownUnits(c.unitIds)) {
+          u.selfDestructAt = u.selfDestructAt === undefined ? this.tickCount + SELF_DESTRUCT_TICKS : undefined;
+        }
+        return;
       case 'stop':
         for (const u of this.ownUnits(c.unitIds)) {
           this.abortTasks(u);
@@ -894,9 +918,14 @@ export class World {
 
   private spray(u: SimUnit, x: number, y: number, z: number): void {
     u.nanoTarget = { x, y, z };
-    if (u.nanoPiece === undefined) {
-      const idx = u.scripts?.query('QueryNanoPiece');
-      u.nanoPiece = idx !== undefined && u.scripts ? u.scripts.pieceName(idx) : null;
+    if (u.nanoPieces === undefined) {
+      const found = new Set<string>();
+      for (let i = 0; i < MAX_NANO_PIECES && u.scripts; i++) {
+        const idx = u.scripts.query('QueryNanoPiece');
+        if (idx === undefined) break;
+        found.add(u.scripts.pieceName(idx));
+      }
+      u.nanoPieces = [...found];
     }
   }
 
@@ -1120,8 +1149,9 @@ export class World {
    * its death blast ("explodeas") goes off, and when the script is done the unit is replaced by its wreck.
    * A Commander's death knocks its player out: all their units die too, as in RWE.
    */
-  kill(u: SimUnit, severity: number): void {
+  kill(u: SimUnit, severity: number, selfDestruct = false): void {
     if (u.dying) return;
+    u.selfDestructAt = undefined;
     this.abortTasks(u);
     if (u.factory) {
       this.cancelInFactory(u);
@@ -1130,7 +1160,7 @@ export class World {
     u.speed = 0;
     u.dying = { since: this.tickCount, severity, thread: u.scripts?.vm.start('Killed', [severity, 0]) };
     this.events.push({ tick: this.tickCount, kind: 'death', unitId: u.id, unitName: u.def.unitName, x: u.x, y: u.y, z: u.z });
-    const blast = this.weaponDefs.get(u.def.explodeAs);
+    const blast = this.weaponDefs.get(selfDestruct && u.def.selfDestructAs ? u.def.selfDestructAs : u.def.explodeAs);
     if (blast) explode(this, blast, u.owner, u.x, u.y + u.height / 2, u.z, u.y < this.terrain.seaLevel);
     if (u.def.commander && !this.defeated.has(u.owner)) {
       this.defeated.add(u.owner);
@@ -1181,6 +1211,16 @@ export class World {
     this.nextWindChange = this.tickCount + this.rng.int(5, 14) * TICKS_PER_SECOND;
     const o = this.map.ota;
     this.windSpeed = this.rng.int(o?.minWindSpeed ?? 0, o?.maxWindSpeed ?? 0);
+    // A direction that changes with the wind (not drawn from the RNG, so games play out as before).
+    this.windDirection = (this.windSpeed * 7919 + this.tickCount * 13) & 0xffff;
+    for (const u of this.unitsInOrder()) if (u.def.windGenerator && !u.dying && this.isFinished(u)) this.tellWind(u);
+  }
+
+  /** Passes the wind to a wind generator's script: speed in COB fixed point, direction as a TA angle. */
+  private tellWind(u: SimUnit): void {
+    const factor = this.windSpeed / Math.max(1, this.map.ota?.maxWindSpeed ?? 1);
+    u.scripts?.start('SetSpeed', [Math.round(factor * 65536)]);
+    u.scripts?.start('SetDirection', [this.windDirection]);
   }
 
   /** Once a second: storage, settlement, then this second's production and running costs. */
