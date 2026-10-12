@@ -8,18 +8,37 @@
       :root { color-scheme: dark; --bg: #0d110d; --panel: #151b15; --line: #2a352a; --text: #d6e6d6; --dim: #7f947f; --accent: #8f8; --metal: #b9c4cf; --energy: #f2d64b; --bad: #ff6b6b; }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 ui-monospace, Menlo, monospace; overflow: hidden; }
-      body { display: grid; grid-template-columns: minmax(230px, 270px) 1fr; }
-      #side { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-right: 1px solid var(--line); height: 100vh; overflow: auto; }
+      /* TA's layout, at 1.5x: a 128-pixel panel down the left (minimap on top, build and order buttons
+         below), a bar across the top for resources and one along the bottom for the selection. The art
+         comes from the player's own game files at load time (src/ui/taGui.ts). */
+      body { display: grid; grid-template-columns: 192px 1fr; }
+      #side { position: relative; display: flex; flex-direction: column; height: 100vh; overflow: hidden auto; background: #0b0d0a var(--side-art, none) top left / 192px auto repeat-y; image-rendering: pixelated; }
+      #minimap { display: block; width: 186px; height: 186px; margin: 3px; object-fit: contain; background: #000; cursor: crosshair; image-rendering: pixelated; flex: none; }
+      #panel { position: relative; width: 192px; height: 528px; flex: none; background: var(--pan-art, none) top left / 192px 528px no-repeat; padding: 10px 8px; display: flex; flex-direction: column; gap: 6px; }
+      #commands { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+      .tabtabs { display: flex; justify-content: space-between; }
+      .sprite-btn { padding: 0; border: 0; background: transparent no-repeat center / contain; image-rendering: pixelated; cursor: pointer; }
+      .sprite-btn:active { filter: brightness(1.3); }
+      .sprite-btn.on { filter: drop-shadow(0 0 3px #8f8); }
+      #sysmenu { padding: 6px 8px 10px; display: flex; flex-direction: column; gap: 5px; background: rgba(8, 10, 8, 0.82); }
+      #sysmenu button { font-size: 11px; padding: 2px 5px; }
+      #sysmenu details { font-size: 11px; line-height: 1.35; }
+      #sysmenu .links a { color: var(--dim); font-size: 11px; }
+      #bottombar { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; display: flex; justify-content: space-between; align-items: center; padding: 0 14px; background: #111 var(--bot-art, none) left / 100% 100% no-repeat; image-rendering: pixelated; color: #e8e8c8; font-size: 12px; text-shadow: 0 1px 0 #000; pointer-events: none; white-space: nowrap; overflow: hidden; }
       h1 { font-size: 14px; margin: 0; color: var(--accent); }
       h1 a { color: var(--dim); font-size: 11px; }
       #status, .dim { color: var(--dim); }
       #view { position: relative; min-width: 0; user-select: none; }
       #view canvas.main { display: block; width: 100%; height: 100%; }
-      #minimap { position: absolute; top: 10px; right: 10px; border: 1px solid #000; outline: 1px solid var(--line); cursor: crosshair; image-rendering: pixelated; max-width: 30%; }
       #box { position: absolute; border: 1px solid #8f8; background: rgba(136, 255, 136, 0.08); pointer-events: none; display: none; }
-      #hint { position: absolute; bottom: 8px; left: 10px; color: var(--dim); pointer-events: none; text-shadow: 0 0 3px #000; }
-      #resources { position: absolute; top: 8px; left: 10px; display: flex; gap: 18px; background: rgba(10, 14, 10, 0.85); border: 1px solid var(--line); padding: 5px 12px; border-radius: 4px; pointer-events: none; }
-      .res { display: grid; grid-template-columns: auto 140px auto; gap: 6px; align-items: center; }
+      #hint { display: none; position: absolute; bottom: 48px; left: 10px; color: var(--dim); pointer-events: none; text-shadow: 0 0 3px #000; }
+      /* TA's top bar (513x32) at 1.5x; the bars and numbers sit in its METAL and ENERGY slots. */
+      #resources { position: absolute; top: 0; left: 0; right: 0; height: 48px; background: #0c0c0c var(--top-art, none) left top / 770px 48px no-repeat; image-rendering: pixelated; pointer-events: none; color: #e8e8c8; font-size: 11px; text-shadow: 0 1px 0 #000; }
+      #resources .res { position: absolute; top: 9px; display: block; width: 200px; }
+      #resources .res.metal { left: 128px; }
+      #resources .res.energy { left: 510px; }
+      #resources .res .bar { height: 7px; margin-top: 15px; background: #111; border: 1px solid #333; }
+      #resources .res span { position: absolute; top: 0; left: 0; }
       .res .bar { height: 8px; background: #222; border: 1px solid #333; position: relative; }
       .res .fill { position: absolute; inset: 0 auto 0 0; }
       .res.metal .fill { background: var(--metal); }
@@ -27,10 +46,10 @@
       .stall { color: var(--bad); }
       button, input, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 3px 6px; border-radius: 3px; }
       button.on { border-color: var(--accent); color: var(--accent); }
-      #selInfo { white-space: pre-line; }
+      #selInfo { overflow: hidden; text-overflow: ellipsis; }
       .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
       #build { display: flex; flex-direction: column; gap: 4px; }
-      #buildGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+      #buildGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
       #buildGrid button { padding: 0; position: relative; aspect-ratio: 1; overflow: hidden; background: #000; border: 2px solid #333; }
       #buildGrid button:hover:not(:disabled) { border-color: #888; }
       #buildGrid button.on { border-color: var(--accent); }
@@ -72,31 +91,35 @@
   </head>
   <body>
     <aside id="side">
-      <h1>Total Annihilation <a href="/maps.html">maps</a> <a href="/models.html">models</a></h1>
-      <div id="status">Loading…</div>
-      <div class="row"><button id="menu">Menu</button> <button id="save">Save</button> <button id="restart">Restart</button> <button id="pause">Pause</button> <button id="fast" title="Run the game 4x faster">Fast</button> <button id="sound" class="on">Sound on</button></div>
-      <label class="row"><input id="edge" type="checkbox" /> Edge scrolling</label>
-      <div id="clock" class="dim"></div>
-      <div id="selInfo" class="dim">Nothing selected.</div>
-      <div id="commands" class="row"></div>
-      <div id="build"></div>
-      <div class="dim">
-        Left-click a unit to select it, or drag a box. Shift adds. Ctrl+A selects everything.<br />
-        Right-click: move; on an enemy: attack; on a rock, tree or wreck with builders: reclaim; on a half-built unit: help build.<br />
-        Builders: pick something to build, then left-click the ground (shift to queue more). Right-click or Esc cancels.<br />
-        Factories: click a unit to queue it (shift: 5), right-click to remove. Right-click the ground sets the rally point.<br />
-        S stops.<br />
-        Moving around: swipe with two fingers (or arrow keys, or middle-drag) to move; pinch or the mouse wheel zooms towards the pointer, and + / − zoom too. Click or drag on the minimap to jump there. Space jumps to your selected units, or to your Commander.
+      <canvas id="minimap" title="Click to jump"></canvas>
+      <div id="panel">
+        <div id="commands"></div>
+        <div id="build"></div>
       </div>
-      <label class="row">or open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
+      <div id="sysmenu">
+        <div class="row"><button id="menu">Menu</button> <button id="save">Save</button> <button id="pause">Pause</button></div>
+        <div class="row"><button id="restart">Restart</button> <button id="fast" title="Run the game 4x faster">Fast</button> <button id="sound" class="on">Sound</button></div>
+        <label class="row"><input id="edge" type="checkbox" /> Edge scrolling</label>
+        <div id="status" class="dim">Loading…</div>
+        <details class="dim">
+          <summary>How to play</summary>
+          Left-click a unit to select it, or drag a box. Shift adds. Ctrl+A selects everything.<br />
+          Right-click: move; on an enemy: attack; on a rock, tree or wreck with builders: reclaim; on a half-built unit: help build.<br />
+          Builders: pick something to build, then left-click the ground (shift to queue more). Right-click or Esc cancels.<br />
+          Factories: click a unit to queue it (shift: 5), right-click to remove. Right-click the ground sets the rally point.<br />
+          S stops. Swipe with two fingers (or arrow keys) to move the view; pinch or + / − to zoom. Space jumps to your selected units, or to your Commander.
+          <label class="row">Open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
+        </details>
+        <div class="dim links"><a href="/maps.html">maps</a> <a href="/models.html">models</a></div>
+      </div>
     </aside>
     <main id="view">
-      <canvas id="minimap" title="Click to jump"></canvas>
       <div id="resources">
-        <div class="res metal"><span>Metal</span><div class="bar"><div class="fill" id="mFill"></div></div><span id="mText"></span></div>
-        <div class="res energy"><span>Energy</span><div class="bar"><div class="fill" id="eFill"></div></div><span id="eText"></span></div>
+        <div class="res metal"><div class="bar"><div class="fill" id="mFill"></div></div><span id="mText"></span></div>
+        <div class="res energy"><div class="bar"><div class="fill" id="eFill"></div></div><span id="eText"></span></div>
       </div>
       <div id="box"></div>
+      <div id="bottombar"><span id="selInfo">Nothing selected.</span><span id="clock"></span></div>
       <div id="loading" hidden>Loading saved game…</div>
       <div id="welcome" hidden>
         <div class="welcome-box">

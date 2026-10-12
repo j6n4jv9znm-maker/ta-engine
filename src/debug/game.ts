@@ -15,6 +15,7 @@ import { RtsCamera } from '../graphics/rtsCamera';
 import { parsePcx } from '../formats/pcx';
 import { GameAudio, type UnitSoundKey } from '../audio/gameAudio';
 import { SetupScreen, type GameSettings } from '../ui/setupScreen';
+import { TaGui } from '../ui/taGui';
 import { loadCampaigns, loadMission, missionResult, type Mission } from '../map/mission';
 import { addSave, deleteSave, describeSave, listSaves } from '../ui/saves';
 import { createTerrain, type Terrain } from '../graphics/terrain';
@@ -52,6 +53,7 @@ const TEAM_COLOURS = [0, 1]; // blue for you, red for the other side
 
 let vfs: Vfs | undefined;
 let audio: GameAudio | undefined;
+let gui: TaGui | undefined;
 let palette: Palette | undefined;
 let lib: TextureLibrary | undefined;
 let featureDefs: Map<string, FeatureDef> | undefined;
@@ -201,6 +203,8 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     }
     menus = await loadBuildMenus(v, new Set(defs.keys()));
     audio = await GameAudio.load(v);
+    gui = await TaGui.load(v, palette);
+    applyPanelArt('arm');
     weapons = await loadWeaponDefs(v);
     aiPlans = await loadAiProfile(v);
     const maps = listMaps(v)
@@ -238,6 +242,7 @@ async function startGame(s: GameSettings, save?: SavedGame): Promise<void> {
     loadingEl.hidden = true;
   }
   audio?.reset(world.tickCount);
+  applyPanelArt(s.side);
   paused = false;
   $('pause').textContent = 'Pause';
 
@@ -464,7 +469,30 @@ canvas.addEventListener('mousedown', (e) => {
   if (e.button === 0) dragStart = localPoint(e);
 });
 
+/** TA's cursor for what a click would do here: select, move, attack, reclaim or place. */
+let cursorAt: { x: number; y: number } | undefined;
+let cursorTime = 0;
+function updateCursor(): void {
+  if (!gui) return;
+  let name = 'cursornormal';
+  if (mode.kind === 'reclaim') name = 'cursorreclamate';
+  else if (mode.kind === 'place') name = 'cursornormal';
+  else if (game && cursorAt) {
+    const own = unitAt(cursorAt, (u) => u.owner === ME && !u.dying);
+    const enemy = selected.size ? unitAt(cursorAt, (u) => u.owner !== ME && !u.dying && game!.world.canSee(ME, u)) : undefined;
+    if (enemy) name = 'cursorattack';
+    else if (own) name = 'cursorselect';
+    else if (selected.size) name = builderIds().length && featureAt(cursorAt) ? 'cursorreclamate' : 'cursormove';
+  }
+  canvas.style.cursor = gui.cursor(name, mode.kind === 'place' ? 'crosshair' : 'auto');
+}
+
 window.addEventListener('mousemove', (e) => {
+  if (e.target === canvas && performance.now() - cursorTime > 80) {
+    cursorTime = performance.now();
+    cursorAt = localPoint(e);
+    updateCursor();
+  }
   if (mode.kind === 'place' && game) updateGhost(localPoint(e));
   if (!dragStart || mode.kind !== 'select') return;
   const p = localPoint(e);
@@ -628,7 +656,7 @@ window.addEventListener('keydown', () => audio?.unlock(), true);
 function setMode(m: Mode): void {
   mode = m;
   ghost.visible = false;
-  canvas.style.cursor = m.kind === 'select' ? '' : 'crosshair';
+  updateCursor();
   refreshPanel();
 }
 
@@ -720,22 +748,24 @@ function refreshPanel(): void {
   } else {
     const counts = new Map<string, number>();
     for (const u of units) counts.set(u.def.name || u.def.unitName, (counts.get(u.def.name || u.def.unitName) ?? 0) + 1);
-    const tasks = units.length === 1 ? describeTasks(units[0]!) : '';
-    selInfoEl.textContent = `Selected ${units.length}:\n` + [...counts].map(([n, c]) => `  ${c} × ${n}`).join('\n') + tasks;
+    // One line along the bottom bar, as in TA: what's selected, then (for one unit) its state.
+    const names = [...counts].map(([n, c]) => (c > 1 ? `${c} × ${n}` : n)).join(', ');
+    const tasks = units.length === 1 ? describeTasks(units[0]!).trim().split('\n').join(' · ') : '';
+    selInfoEl.textContent = tasks ? `${names} · ${tasks}` : names;
   }
 
   // Command buttons.
   commandsEl.textContent = '';
   if (units.length) {
-    addButton(commandsEl, 'Stop (S)', () => game?.world.issue({ kind: 'stop', unitIds: [...selected] }));
+    spriteButton(commandsEl, 'STOP', 0, 'Stop (S)', () => game?.world.issue({ kind: 'stop', unitIds: [...selected] }));
     if (builderIds().length) {
-      const b = addButton(commandsEl, 'Reclaim', () => setMode(mode.kind === 'reclaim' ? { kind: 'select' } : { kind: 'reclaim' }));
+      const b = spriteButton(commandsEl, 'RECLAIM', mode.kind === 'reclaim' ? 1 : 0, 'Reclaim', () => setMode(mode.kind === 'reclaim' ? { kind: 'select' } : { kind: 'reclaim' }));
       b.classList.toggle('on', mode.kind === 'reclaim');
     }
     const switchable = units.filter((u) => u.def.onOffable);
     if (switchable.length) {
       const on = switchable.some((u) => u.scripts?.state.activated);
-      addButton(commandsEl, on ? 'Turn off' : 'Turn on', () => game?.world.issue({ kind: 'activate', unitIds: switchable.map((u) => u.id), on: !on }));
+      spriteButton(commandsEl, 'ONOFF', on ? 2 : 1, on ? 'Turn off' : 'Turn on', () => game?.world.issue({ kind: 'activate', unitIds: switchable.map((u) => u.id), on: !on }));
     }
   }
 
@@ -756,7 +786,7 @@ function refreshPanel(): void {
     // Page arrows on their own fixed row, so they don't jump around between clicks.
     const nav = document.createElement('div');
     nav.className = 'row';
-    addButton(nav, '‹ prev', () => {
+    spriteButton(nav, 'PREV', 0, '‹ prev', () => {
       menuPage = (menuPage + pages.length - 1) % pages.length;
       refreshPanel();
     });
@@ -764,7 +794,7 @@ function refreshPanel(): void {
     label.className = 'dim';
     label.textContent = `page ${menuPage + 1} of ${pages.length}`;
     nav.append(label);
-    addButton(nav, 'next ›', () => {
+    spriteButton(nav, 'NEXT', 0, 'next ›', () => {
       menuPage = (menuPage + 1) % pages.length;
       refreshPanel();
     });
@@ -880,6 +910,38 @@ function describeTasks(u: SimUnit): string {
   return lines.length ? '\n' + lines.join('\n') : '';
 }
 
+/** The side whose interface art is showing ('arm' or 'core'). */
+let panelSide: 'arm' | 'core' = 'arm';
+
+/** Puts TA's panel art for this side behind the side panel and the top and bottom bars. */
+function applyPanelArt(side: 'arm' | 'core'): void {
+  panelSide = side;
+  if (!gui) return;
+  const file = side === 'arm' ? 'armint' : 'corint';
+  const set = (v: string, sprite: { url: string } | undefined) => document.documentElement.style.setProperty(v, sprite ? `url(${sprite.url})` : 'none');
+  set('--side-art', gui.sprite(`${file}:panelside2`) ?? gui.sprite(`${file}:panelside`));
+  set('--top-art', gui.sprite(`${file}:paneltop`));
+  set('--bot-art', gui.sprite(`${file}:panelbot`));
+  set('--pan-art', gui.sprite(side === 'arm' ? 'ARMPAN' : 'CORPAN'));
+  canvas.style.cursor = gui.cursor('cursornormal');
+  panelKey = '';
+  refreshPanel();
+}
+
+/** One of TA's own buttons (e.g. ARMSTOP) at 1.5x, or a plain button if the game files lack it. */
+function spriteButton(parent: HTMLElement, name: string, frame: number, label: string, onClick: () => void): HTMLButtonElement {
+  const sprite = gui?.sprite(`${panelSide === 'arm' ? 'ARM' : 'COR'}${name}`, frame);
+  if (!sprite) return addButton(parent, label, onClick);
+  const b = document.createElement('button');
+  b.className = 'sprite-btn';
+  b.title = label;
+  b.setAttribute('aria-label', label);
+  Object.assign(b.style, { backgroundImage: `url(${sprite.url})`, width: `${sprite.width * 1.5}px`, height: `${sprite.height * 1.5}px` });
+  b.addEventListener('click', onClick);
+  parent.append(b);
+  return b;
+}
+
 function addButton(parent: HTMLElement, label: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = label;
@@ -914,7 +976,10 @@ function prepareMinimap(map: GameMap): void {
     img.data.set([c.r, c.g, c.b, 255], i * 4);
   }
   minimapImage = img;
-  minimapEl.style.width = `${Math.min(width * 1.5, 260)}px`;
+  // Fit the minimap into TA's square spot at the top of the panel, keeping its shape.
+  const fit = 186 / Math.max(width, height);
+  minimapEl.style.width = `${width * fit}px`;
+  minimapEl.style.height = `${height * fit}px`;
 }
 
 const fogCanvas = document.createElement('canvas');
