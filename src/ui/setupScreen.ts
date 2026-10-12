@@ -206,7 +206,7 @@ export class SetupScreen {
         `${info.starts.length} start positions${o?.size ? ` · ${escape(o.size)}` : ''}`,
         o ? `Wind ${o.minWindSpeed / 100}–${o.maxWindSpeed / 100} · tidal ${o.tidalStrength}` : '',
         info.water > 0.35 ? 'Lots of water: build a shipyard on the shore for ships.' : '',
-        info.starts.length < 2 ? '<span class="warn">Only one start position: no room for an opponent.</span>' : '',
+        info.starts.length < 2 ? 'One start position: the computer starts on the far side of the map.' : '',
       ];
       this.details.innerHTML = lines.filter(Boolean).join('<br>');
     });

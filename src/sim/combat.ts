@@ -371,6 +371,9 @@ export function explode(world: World, w: WeaponDef, owner: number, x: number, y:
     if (d > r) continue;
     let dmg = damageAgainst(w, u.def.unitName) * Math.min(1, Math.max(0, 1 - d / r));
     if (u.scripts?.state.armored) dmg *= u.def.damageModifier;
+    // Cheats: +doubleshot / +halfshot change the attacking player's damage.
+    if (world.cheat(owner, 'doubleshot')) dmg *= 2;
+    if (world.cheat(owner, 'halfshot')) dmg /= 2;
     world.damage(u, dmg, owner);
   }
 }

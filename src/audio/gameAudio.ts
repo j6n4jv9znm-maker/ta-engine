@@ -14,10 +14,11 @@ import type { Vfs } from '../vfs';
 export type UnitSoundKey = 'select1' | 'ok1' | 'arrived1' | 'cant1' | 'build' | 'underattack' | 'unitcomplete' | 'activate' | 'deactivate';
 
 export interface Listener {
-  /** The point the view looks at, and how far the view reaches sideways (world units). */
+  /** The point the view looks at, and how far the view reaches sideways and up/down on the ground (world units). */
   x: number;
   z: number;
   halfWidth: number;
+  halfDepth: number;
 }
 
 const MAX_VOICES = 24;
@@ -86,10 +87,12 @@ export class GameAudio {
     if (at) {
       const dx = at.x - at.listener.x;
       const dz = at.z - at.listener.z;
-      const reach = at.listener.halfWidth * 2.2;
-      const d = Math.hypot(dx, dz);
-      if (d > reach) return;
-      gain = 1 - (d / reach) * 0.85;
+      // As in TA, only what happens on (or just off) the screen is heard: fighting elsewhere stays quiet.
+      const ex = Math.abs(dx) / (at.listener.halfWidth * 1.1);
+      const ez = Math.abs(dz) / (at.listener.halfDepth * 1.1);
+      const edge = Math.max(ex, ez);
+      if (edge > 1) return;
+      gain = 1 - Math.max(0, edge - 0.6) * 1.5;
       pan = Math.max(-1, Math.min(1, dx / (at.listener.halfWidth * 1.5)));
     }
     const now = performance.now();

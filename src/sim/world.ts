@@ -51,6 +51,8 @@ export type Task =
 export type Command =
   | { kind: 'move'; unitIds: number[]; x: number; z: number; queue?: boolean }
   | { kind: 'stop'; unitIds: number[] }
+  /** One of TA's chat cheats (e.g. "+atm"), for `player`; see CHEATS. Toggles where TA's do. */
+  | { kind: 'cheat'; player: number; code: string }
   /** TA's Ctrl+D: blow the units up after a 5 second countdown; given again, it cancels. */
   | { kind: 'selfDestruct'; unitIds: number[] }
   | { kind: 'build'; unitId: number; unitName: string; x: number; z: number; queue?: boolean }
@@ -187,7 +189,11 @@ const BOMB_RUN_LENGTH = 700;
 
 /** After this many shots in a row are blocked, an attacking unit moves in closer. */
 export const BLOCKED_SHOTS_TO_MOVE = 3;
-const REPLANS_PER_TICK = 20;
+/** How many new paths may be planned in one tick (the rest wait for the next). */
+const PLANS_PER_TICK = 4;
+/** The most cells one path search may expand before handing back the best leg it found. */
+const MAX_PATH_EXPANSIONS = 6000;
+const REPLANS_PER_TICK = 8;
 /** Wind generators make full power at this wind speed (RWE MaxUtilizableWindSpeed). */
 const MAX_USEFUL_WIND = 5000;
 /** How long to wait for a build script to report its stance before working anyway. */
@@ -218,10 +224,13 @@ export class World {
   readonly ais: { update(world: World): void }[] = [];
   tickCount = 0;
   windSpeed = 0;
+  /** Cheats switched on, per player (codes without the "+", lower case). */
+  readonly cheats = new Map<number, Set<string>>();
   windDirection = 0;
   private nextProjectileId = 1;
   /** Re-plans allowed this tick; units over budget keep their old path a little longer. */
   private replanBudget = 0;
+  private planBudget = 0;
   private orderCache: SimUnit[] | undefined;
   private nextWindChange = 0;
   private nextId = 1;
@@ -451,6 +460,7 @@ export class World {
     for (const c of cmds) this.apply(c);
     for (const ai of this.ais) ai.update(this);
     this.replanBudget = REPLANS_PER_TICK;
+    this.planBudget = PLANS_PER_TICK;
 
     if (this.tickCount % TICKS_PER_SECOND === 0) this.updateEconomy();
     this.updateWind();
@@ -486,6 +496,9 @@ export class World {
 
   private apply(c: Command): void {
     switch (c.kind) {
+      case 'cheat':
+        this.applyCheat(c.player, c.code);
+        return;
       case 'selfDestruct':
         for (const u of this.ownUnits(c.unitIds)) {
           u.selfDestructAt = u.selfDestructAt === undefined ? this.tickCount + SELF_DESTRUCT_TICKS : undefined;
@@ -871,11 +884,57 @@ export class World {
     if (this.addWork(u, target)) this.finishTask(u);
   }
 
+  /** Whether `player` has a cheat on. */
+  cheat(player: number, code: string): boolean {
+    return this.cheats.get(player)?.has(code) ?? false;
+  }
+
+  /**
+   * TA's cheats, typed in the chat line:
+   *   +atm         fill metal and energy to full (and add 10,000 storage of each, once)
+   *   +nocost      building is free and instant (toggle)
+   *   +nowisee     see the whole map (toggle; "+los" too)
+   *   +doubleshot  your weapons do double damage (toggle)
+   *   +halfshot    your weapons do half damage (toggle)
+   * Returns false for codes it doesn't know.
+   */
+  applyCheat(player: number, raw: string): boolean {
+    const code = raw.trim().replace(/^\+/, '').toLowerCase();
+    const p = this.players[player];
+    if (!p) return false;
+    let set = this.cheats.get(player);
+    if (!set) this.cheats.set(player, (set = new Set()));
+    const toggle = (c: string) => (set!.has(c) ? set!.delete(c) : set!.add(c));
+    switch (code) {
+      case 'atm':
+        if (!set.has('atm')) {
+          set.add('atm');
+          p.cheatStorage += 10000;
+        }
+        p.fill(p.maxMetal + p.cheatStorage, p.maxEnergy + p.cheatStorage);
+        return true;
+      case 'nocost':
+      case 'nowisee':
+      case 'doubleshot':
+      case 'halfshot':
+        toggle(code);
+        if (code === 'nowisee') this.updateVisibility();
+        return true;
+      case 'los':
+        toggle('nowisee');
+        this.updateVisibility();
+        return true;
+      default:
+        return false;
+    }
+  }
+
   /** One tick of building: pays and adds progress. Returns true when the target is finished. */
   private addWork(builder: SimUnit, target: SimUnit): boolean {
-    const work = Math.min(builder.def.workerTime / TICKS_PER_SECOND, target.def.buildTime - target.buildProgress);
+    const free = this.cheat(builder.owner, 'nocost');
+    const work = free ? target.def.buildTime - target.buildProgress : Math.min(builder.def.workerTime / TICKS_PER_SECOND, target.def.buildTime - target.buildProgress);
     const share = work / target.def.buildTime;
-    const paid = this.players[builder.owner]?.trySpend(target.def.buildCostEnergy * share, target.def.buildCostMetal * share);
+    const paid = free || this.players[builder.owner]?.trySpend(target.def.buildCostEnergy * share, target.def.buildCostMetal * share);
     if (!paid) return false;
     this.spray(builder, target.x, target.y + 8, target.z);
     target.buildProgress += work;
@@ -1199,6 +1258,8 @@ export class World {
       const viewers = this.unitsInOrder()
         .filter((u) => u.owner === p && this.isFinished(u) && !u.dying)
         .map((u) => ({ x: u.x, z: u.z, sight: u.def.sightDistance, radar: u.scripts?.state.activated || !u.def.onOffable ? u.def.radarDistance : 0 }));
+      // +nowisee: one viewer that sees everything.
+      if (this.cheat(p, 'nowisee')) viewers.push({ x: this.map.widthUnits / 2, z: this.map.heightUnits / 2, sight: Math.hypot(this.map.widthUnits, this.map.heightUnits), radar: 0 });
       this.visibility.refresh(p, viewers);
     }
   }
@@ -1283,6 +1344,12 @@ export class World {
       (u.inCollision && now - u.path.createdTick >= REPATH_INTERVAL) ||
       (u.path.index >= u.path.waypoints.length && !u.path.complete && now - u.path.createdTick >= REPATH_INTERVAL);
     // Re-plans (not first plans) share a per-tick budget so a big jam can't stall the game.
+    // First plans share a (larger) budget too: a whole army ordered at once plans over a few ticks
+    // instead of stalling one tick (units without a path wait in place meanwhile).
+    if (needPath && !u.path) {
+      if (this.planBudget <= 0) return [u.rotation, 0];
+      this.planBudget--;
+    }
     if (needPath && u.path && this.replanBudget <= 0) return u.path.index < u.path.waypoints.length ? this.seek(u, ...u.path.waypoints[u.path.index]!, Math.hypot(u.path.waypoints[u.path.index]![0] - u.x, u.path.waypoints[u.path.index]![1] - u.z)) : [u.rotation, 0];
     if (needPath) {
       if (u.path) this.replanBudget--;
@@ -1382,6 +1449,9 @@ export class World {
       // Aiming at something solid (a building, a unit's spot)? Aim at the open ground next to it, so the
       // search can finish instead of exploring the whole map.
       goal: nearestOpen(grid, w, this.terrain.height, clampCell(goal)),
+      // Long trips are planned in legs: a search stops after this many cells and the unit re-plans when
+      // it gets to the end of the leg, so one far order never stalls a tick.
+      maxExpansions: MAX_PATH_EXPANSIONS,
     });
     // Boxed in by parked units (a crowd at a rally point)? Then plan through them and let collisions sort it out.
     if (avoidIdle && result.waypoints.length === 0 && !result.complete) return this.planPath(u, tx, tz, false);

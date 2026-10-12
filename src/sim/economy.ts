@@ -56,6 +56,15 @@ export class PlayerEconomy {
   }
 
   /** Adds production (positive values) right away into this second's buffer. */
+  /** Extra storage of each resource from the +atm cheat. */
+  cheatStorage = 0;
+
+  /** Sets the stock of both resources (the +atm cheat). */
+  fill(metal: number, energy: number): void {
+    this.metal = metal;
+    this.energy = energy;
+  }
+
   produce(energy: number, metal: number): void {
     this.energyIn += Math.max(0, energy);
     this.metalIn += Math.max(0, metal);
@@ -76,8 +85,8 @@ export class PlayerEconomy {
 
   /** Settles the second's buffers. `maxMetal`/`maxEnergy` are the storage for the coming second. */
   settle(maxMetal: number, maxEnergy: number): void {
-    this.maxMetal = maxMetal;
-    this.maxEnergy = maxEnergy;
+    this.maxMetal = maxMetal + this.cheatStorage;
+    this.maxEnergy = maxEnergy + this.cheatStorage;
     this.lastMetalIn = this.metalIn;
     this.lastEnergyIn = this.energyIn;
     this.lastMetalOut = this.metalOut;

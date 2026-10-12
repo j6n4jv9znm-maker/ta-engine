@@ -95,7 +95,9 @@ let menuBuilderId = -1;
 
 // --- Scene ------------------------------------------------------------------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+// Retina screens have 4x the pixels; drawing all of them made the game lag on a MacBook Air, and TA's
+// art is low resolution anyway, so draw at most 1.5x.
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.domElement.className = 'main';
 view.prepend(renderer.domElement);
 const scene = new THREE.Scene();
@@ -107,9 +109,9 @@ scene.add(sun, sun.target);
 // Shadows, as TA draws under every unit: the sun casts them a little down and to the right. The
 // shadow camera follows the view so only what's on screen needs shadow-map space.
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.bias = -0.0015;
 const SUN_DIR = new THREE.Vector3(-0.6, 1, -0.5).normalize();
 function aimSun(): void {
@@ -225,11 +227,14 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     applyPanelArt('arm');
     weapons = await loadWeaponDefs(v);
     aiPlans = await loadAiProfile(v);
+    // Campaign mission maps belong on the Campaign tab, not in the skirmish list.
+    const campaigns = await loadCampaigns(v);
+    const missionMaps = new Set(campaigns.flatMap((c) => c.missions.map((m) => m.map.toLowerCase())));
     const maps = listMaps(v)
-      .filter((n) => !/example/i.test(n))
+      .filter((n) => !/example/i.test(n) && !missionMaps.has(n.toLowerCase()))
       .sort((a, b) => a.localeCompare(b));
     setup?.el.remove();
-    setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined, await loadCampaigns(v));
+    setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined, campaigns);
     document.body.append(setup.el);
     void dressSetupScreen(v);
     showSaves();
@@ -639,9 +644,56 @@ canvas.addEventListener('contextmenu', (e) => {
   showMoveMarker(hit);
 });
 
+// --- Cheats: Enter opens TA's chat line ---------------------------------------------------
+const chatEl = $<HTMLInputElement>('chat');
+const noteEl = $('note');
+const CHEAT_NAMES: Record<string, string> = {
+  atm: 'ATM: metal and energy filled (and +10,000 storage)',
+  nocost: 'NOCOST: free, instant building',
+  nowisee: 'NOWISEE: whole map visible',
+  los: 'LOS: whole map visible',
+  doubleshot: 'DOUBLESHOT: double damage',
+  halfshot: 'HALFSHOT: half damage',
+};
+let noteTimer: number | undefined;
+function note(text: string): void {
+  noteEl.textContent = text;
+  noteEl.hidden = false;
+  clearTimeout(noteTimer);
+  noteTimer = window.setTimeout(() => (noteEl.hidden = true), 4000);
+}
+chatEl.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Escape') {
+    chatEl.hidden = true;
+    chatEl.blur();
+  } else if (e.key === 'Enter') {
+    const code = chatEl.value.trim().replace(/^\+/, '').toLowerCase();
+    chatEl.value = '';
+    chatEl.hidden = true;
+    chatEl.blur();
+    if (!code || !game) return;
+    const name = CHEAT_NAMES[code];
+    if (!name) {
+      note(`Unknown cheat. Try: ${Object.keys(CHEAT_NAMES).map((c) => '+' + c).join(', ')}`);
+      return;
+    }
+    game.world.issue({ kind: 'cheat', player: ME, code });
+    const toggles = code !== 'atm';
+    const on = toggles ? !game.world.cheat(ME, code === 'los' ? 'nowisee' : code) : true;
+    note(`Cheat ${name}${toggles ? (on ? ' (on)' : ' (off)') : ''}`);
+  }
+});
+
 window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'SELECT') return;
   if (!game) return;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    chatEl.hidden = false;
+    chatEl.focus();
+    return;
+  }
   const k = e.key.toLowerCase();
   if (k === 's' && selected.size && !(e.ctrlKey || e.metaKey)) game.world.issue({ kind: 'stop', unitIds: [...selected] });
   // Ctrl+D: self-destruct (again to cancel), as in TA. The way to get rid of your own buildings.
@@ -681,8 +733,10 @@ function reply(key: UnitSoundKey): void {
 }
 
 /** Where sounds are heard from: the middle of the view, and how wide the view is on the ground. */
-function listener(): { x: number; z: number; halfWidth: number } {
-  return { x: rts.target.x, z: rts.target.z, halfWidth: rts.viewHalfHeight() * rts.aspect };
+function listener(): { x: number; z: number; halfWidth: number; halfDepth: number } {
+  // The view's half height is measured across the screen; on the tilted ground it covers more.
+  const h = rts.viewHalfHeight();
+  return { x: rts.target.x, z: rts.target.z, halfWidth: h * rts.aspect, halfDepth: h / Math.sin(Math.atan(2)) };
 }
 
 // Browsers only allow sound once the player has clicked or pressed a key.

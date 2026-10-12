@@ -112,7 +112,7 @@ export async function parseMission(map: string, root: TdfBlock, readBrief: (name
 /** "won", "lost" or undefined (still going), judged from what's left in the game. */
 export function missionResult(
   goals: MissionGoals,
-  units: Iterable<{ owner: number; dying: unknown; x: number; z: number; def: { unitName: string } }>,
+  units: Iterable<{ owner: number; dying: unknown; x: number; z: number; def: { unitName: string; bmCode?: number } }>,
 ): 'won' | 'lost' | undefined {
   let mine = 0;
   let enemies = 0;
@@ -122,7 +122,8 @@ export function missionResult(
     if (u.dying) continue;
     if (u.owner === 0) {
       mine++;
-      if (goals.moveTo && Math.hypot(u.x - goals.moveTo.x, u.z - goals.moveTo.z) <= goals.moveTo.radius) reached = true;
+      // Only a unit that can move counts as reaching the spot (mission 1's gate already stands on it).
+      if (goals.moveTo && u.def.bmCode !== 0 && Math.hypot(u.x - goals.moveTo.x, u.z - goals.moveTo.z) <= goals.moveTo.radius) reached = true;
     } else {
       enemies++;
       if (goals.killAllOfType && u.def.unitName.toUpperCase() === goals.killAllOfType) enemiesOfType++;
