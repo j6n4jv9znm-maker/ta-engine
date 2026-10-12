@@ -15,6 +15,7 @@ import { RtsCamera } from '../graphics/rtsCamera';
 import { parsePcx } from '../formats/pcx';
 import { GameAudio, type UnitSoundKey } from '../audio/gameAudio';
 import { SetupScreen, type GameSettings } from '../ui/setupScreen';
+import { loadCampaigns, loadMission, missionResult, type Mission } from '../map/mission';
 import { addSave, deleteSave, describeSave, listSaves } from '../ui/saves';
 import { createTerrain, type Terrain } from '../graphics/terrain';
 import { loadTextureLibrary, type TextureLibrary } from '../graphics/textures';
@@ -80,6 +81,8 @@ let paused = false;
 let setup: SetupScreen | undefined;
 let settings: GameSettings | undefined;
 let seed = 0;
+let mission: Mission | undefined;
+let missionOutcome: 'won' | 'lost' | undefined;
 let speed = 1;
 
 /** What a left-click does right now. */
@@ -204,7 +207,7 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
       .filter((n) => !/example/i.test(n))
       .sort((a, b) => a.localeCompare(b));
     setup?.el.remove();
-    setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined);
+    setup = new SetupScreen(v, palette, maps, (s) => void startGame(s), () => undefined, await loadCampaigns(v));
     document.body.append(setup.el);
     showSaves();
     setup.show(false);
@@ -226,7 +229,9 @@ async function startGame(s: GameSettings, save?: SavedGame): Promise<void> {
   const map = await loadGameMap(vfs, mapName, featureDefs);
   seed = save?.seed ?? (Math.random() * 2 ** 31) | 0;
   const deps = { assets: (n: string) => assets.get(n.toLowerCase()), weapons, featureDefs, menus, aiPlans };
-  const { world, home: mine } = createSkirmish(map, s, seed, deps);
+  mission = s.mission ? await loadMission(vfs, s.mission) : undefined;
+  missionOutcome = undefined;
+  const { world, home: mine } = createSkirmish(map, s, seed, deps, mission);
   if (save) {
     loadingEl.hidden = false;
     await replayGame(world, save, (f) => (loadingEl.textContent = `Loading saved game… ${Math.round(f * 100)}%`));
@@ -378,16 +383,17 @@ function drawOverlay(): void {
     g.fillStyle = f > 0.6 ? '#4f4' : f > 0.3 ? '#ff4' : '#f44';
     g.fillRect(s.x - bw / 2, s.y, bw * f, 3);
   }
-  // Win or lose.
-  const lost = game.world.defeated.has(ME);
-  const won = !lost && game.world.players.every((_, p) => p === ME || game!.world.defeated.has(p)) && game.world.players.length > 1;
+  // Win or lose (a campaign mission by its own goals, checked about once a second).
+  if (mission && !missionOutcome && game.world.tickCount % 30 === 0) missionOutcome = missionResult(mission.goals, game.world.units.values());
+  const lost = mission ? missionOutcome === 'lost' : game.world.defeated.has(ME);
+  const won = mission ? missionOutcome === 'won' : !lost && game.world.players.every((_, p) => p === ME || game!.world.defeated.has(p)) && game.world.players.length > 1;
   if (lost || won) {
     g.fillStyle = 'rgba(0,0,0,0.55)';
     g.fillRect(0, h / 2 - 40, w, 80);
     g.fillStyle = lost ? '#ff7070' : '#8f8';
     g.font = 'bold 28px ui-monospace, Menlo, monospace';
     g.textAlign = 'center';
-    g.fillText(lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2);
+    g.fillText(mission ? (lost ? 'Mission failed' : 'Mission complete') : lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2);
     g.font = '14px ui-monospace, Menlo, monospace';
     g.fillStyle = '#ddd';
     g.fillText('Press Restart to play again, or Menu for a new game.', w / 2, h / 2 + 26);
