@@ -25,14 +25,23 @@ export interface RtsCameraControls {
   rotate?: boolean;
 }
 
-const PITCH = THREE.MathUtils.degToRad(58); // down from horizontal; close to TA's look
+/**
+ * TA draws the map as if seen from straight above, with things lifted up the screen by half their
+ * height. An orthographic camera tilted down by atan(2) (about 63°) gives the same proportions: no
+ * perspective, flat-looking ground, and height shown at half the scale of ground distance.
+ */
+const PITCH = Math.atan(2);
+/** How much of the ground the view shows for a given `distance` (it plays the part of zoom). */
+const VIEW_ANGLE = THREE.MathUtils.degToRad(17.5);
 const MIN_DIST = 150;
 const MAX_DIST = 4000;
 const EDGE = 12; // pixels from the view's edge that start edge-scrolling
 const EDGE_DELAY = 0.25; // seconds the pointer must rest at an edge, so crossing it to the side panel doesn't scroll
 
 export class RtsCamera {
-  readonly camera: THREE.PerspectiveCamera;
+  readonly camera: THREE.OrthographicCamera;
+  /** Width over height of the view. */
+  aspect = 1;
   /** Point on the ground the camera looks at. */
   readonly target = new THREE.Vector3();
   distance = 900;
@@ -58,7 +67,7 @@ export class RtsCamera {
     this.wasd = controls.wasd ?? true;
     this.dragButtons = controls.dragButtons ?? [1, 2];
     this.rotate = controls.rotate ?? true;
-    this.camera = new THREE.PerspectiveCamera(35, 1, 10, 30000);
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 40000);
     this.target.set(opts.mapWidth / 2, 0, opts.mapHeight / 2);
 
     const on = <K extends keyof HTMLElementEventMap>(t: EventTarget, type: K | string, fn: (e: never) => void) => {
@@ -150,8 +159,13 @@ export class RtsCamera {
   }
 
   resize(width: number, height: number): void {
-    this.camera.aspect = width / Math.max(1, height);
-    this.camera.updateProjectionMatrix();
+    this.aspect = width / Math.max(1, height);
+    this.place();
+  }
+
+  /** Half the height of the view on the ground, in world units, at the current zoom. */
+  viewHalfHeight(): number {
+    return this.distance * Math.tan(VIEW_ANGLE);
   }
 
   /** Moves the view by screen-relative amounts in world units (dx right, dz down the screen). */
@@ -165,7 +179,7 @@ export class RtsCamera {
 
   /** Pans by an amount in screen pixels, so the ground moves with the pointer or fingers. */
   panPixels(px: number, py: number): void {
-    const perPixel = (2 * this.distance * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) / Math.max(1, this.el.clientHeight);
+    const perPixel = (2 * this.viewHalfHeight()) / Math.max(1, this.el.clientHeight);
     this.panScreen(px * perPixel, (py * perPixel) / Math.sin(PITCH));
   }
 
@@ -193,13 +207,18 @@ export class RtsCamera {
 
   /** Puts the camera where `target`, `distance` and `yaw` say. */
   private place(): void {
-    const horiz = this.distance * Math.cos(PITCH);
+    const back = 8000; // far enough that hills and aircraft are never behind the camera
+    const horiz = back * Math.cos(PITCH);
     this.camera.position.set(
       this.target.x + Math.sin(this.yaw) * horiz,
-      this.target.y + this.distance * Math.sin(PITCH),
+      this.target.y + back * Math.sin(PITCH),
       this.target.z + Math.cos(this.yaw) * horiz,
     );
     this.camera.lookAt(this.target);
+    // The view's size follows the zoom; the camera itself sits well back so nothing gets clipped.
+    const h = this.viewHalfHeight();
+    Object.assign(this.camera, { left: -h * this.aspect, right: h * this.aspect, top: h, bottom: -h });
+    this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
   }
 

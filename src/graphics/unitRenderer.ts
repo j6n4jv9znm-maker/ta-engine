@@ -214,6 +214,8 @@ export class UnitRenderer {
     ring.scale.set(r, 1, r);
     ring.renderOrder = 2;
     const model = cloneModel(template);
+    // Units and buildings cast TA-style shadows onto the ground.
+    model.root.traverse((o) => (o.castShadow = o instanceof THREE.Mesh));
     const holder = new THREE.Group();
     holder.add(model.root);
     return { holder, model, ring, nano: false, blown: new Set(), seenTick: -Infinity };
