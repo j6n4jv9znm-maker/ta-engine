@@ -105,11 +105,22 @@ fn read_range(app: AppHandle, name: String, offset: u64, length: u64) -> Result<
     Ok(Response::new(buf))
 }
 
+/// Appends a line to log.txt next to the settings, so problems in the app can be looked into later.
+#[tauri::command]
+fn app_log(app: AppHandle, line: String) -> Result<(), String> {
+    use std::io::Write;
+    let path = settings_path(&app)?.with_file_name("log.txt");
+    // Keep the log small: start over once it passes 1 MB.
+    let append = fs::metadata(&path).map(|m| m.len() < 1_000_000).unwrap_or(true);
+    let mut f = fs::OpenOptions::new().create(true).write(true).append(append).truncate(!append).open(path).map_err(|e| e.to_string())?;
+    writeln!(f, "{line}").map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![data_dir, choose_data_dir, list_archives, read_range])
+        .invoke_handler(tauri::generate_handler![data_dir, choose_data_dir, list_archives, read_range, app_log])
         .run(tauri::generate_context!())
         .expect("error while running the app");
 }
