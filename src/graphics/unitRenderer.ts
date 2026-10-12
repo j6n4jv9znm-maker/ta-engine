@@ -29,7 +29,24 @@ interface Drawn {
   blown: Set<string>;
 }
 
-const MAX_SPRAYS = 256;
+const MAX_NANO_PARTICLES = 4096;
+/** Nanolathe particles each builder sends per second, and how long one takes to arrive (ms). */
+const NANO_PER_SECOND = 140;
+const NANO_FLIGHT_MS = 420;
+
+/** A soft round dot for particles. */
+function dotTexture(): THREE.Texture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const g = c.getContext('2d')!;
+  const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.4, 'rgba(255,255,255,0.6)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 32, 32);
+  return new THREE.CanvasTexture(c);
+}
 /** How long (ticks) an enemy stays drawn after leaving sight; covers the gap between line-of-sight updates. */
 const SIGHT_GRACE_TICKS = 20;
 
@@ -40,10 +57,20 @@ export class UnitRenderer {
   private readonly ringGeo = new THREE.RingGeometry(0.85, 1, 32).rotateX(-Math.PI / 2);
   private readonly ringMat = new THREE.MeshBasicMaterial({ color: 0x55ff55, depthTest: false, transparent: true, opacity: 0.9 });
   private readonly nanoMat = new THREE.MeshBasicMaterial({ color: 0x66ff66, wireframe: true, transparent: true, opacity: 0.55 });
-  private readonly sprayPositions = new Float32Array(MAX_SPRAYS * 6);
+  private readonly sprayPositions = new Float32Array(MAX_NANO_PARTICLES * 3);
   private readonly sprayGeo = new THREE.BufferGeometry();
-  private readonly sprayMat = new THREE.LineBasicMaterial({ color: 0x77ff77, transparent: true, opacity: 0.8 });
-  private readonly sprays: THREE.LineSegments;
+  private readonly sprayMat = new THREE.PointsMaterial({
+    color: 0x4dff3a,
+    size: 9,
+    map: dotTexture(),
+    transparent: true,
+    opacity: 0.95,
+    depthWrite: false,
+  });
+  private readonly sprays: THREE.Points;
+  /** Nanolathe particles in flight: start, end, and when they set off (ms). */
+  private nano: { sx: number; sy: number; sz: number; ex: number; ey: number; ez: number; born: number }[] = [];
+  private lastSpray = performance.now();
 
   constructor(
     private readonly lib: TextureLibrary,
@@ -53,7 +80,7 @@ export class UnitRenderer {
   ) {
     this.group.name = 'units';
     this.sprayGeo.setAttribute('position', new THREE.BufferAttribute(this.sprayPositions, 3));
-    this.sprays = new THREE.LineSegments(this.sprayGeo, this.sprayMat);
+    this.sprays = new THREE.Points(this.sprayGeo, this.sprayMat);
     this.sprays.frustumCulled = false;
     this.group.add(this.sprays);
   }
@@ -127,14 +154,20 @@ export class UnitRenderer {
     });
   }
 
-  /** Green spray lines from each working builder's nano piece to what it is working on. */
+  /**
+   * The nanolathe: a stream of glowing green particles from each working builder's nano piece, fanning
+   * out over the thing it is building, repairing or reclaiming (as in TA). Cosmetic, so it uses
+   * Math.random and wall-clock time.
+   */
   private updateSprays(world: World): void {
-    let n = 0;
+    const now = performance.now();
+    const dt = Math.min(100, now - this.lastSpray);
+    this.lastSpray = now;
     const from = new THREE.Vector3();
     for (const u of world.units.values()) {
-      if (!u.nanoTarget || n >= MAX_SPRAYS) continue;
+      if (!u.nanoTarget || this.nano.length >= MAX_NANO_PARTICLES) continue;
       const d = this.drawn.get(u.id);
-      if (!d) continue;
+      if (!d || !d.holder.visible) continue;
       const piece = u.nanoPiece ? d.model.pieces.get(u.nanoPiece.toLowerCase()) : undefined;
       if (piece) {
         d.holder.updateWorldMatrix(true, true);
@@ -142,13 +175,26 @@ export class UnitRenderer {
       } else {
         from.set(u.x, u.y + 16, u.z);
       }
-      // A little jitter at the far end makes the spray shimmer.
       const t = u.nanoTarget;
-      const j = () => (Math.random() - 0.5) * 10;
-      this.sprayPositions.set([from.x, from.y, from.z, t.x + j(), t.y + j() * 0.5, t.z + j()], n * 6);
-      n++;
+      const target = u.tasks[0] && 'targetId' in u.tasks[0] ? world.units.get(u.tasks[0].targetId as number) : undefined;
+      const spread = target ? Math.max(target.def.footprintX, target.def.footprintZ) * 6 : 12;
+      for (let k = Math.max(1, Math.round((dt / 1000) * NANO_PER_SECOND)); k > 0; k--) {
+        const a = Math.random() * Math.PI * 2;
+        const r = Math.sqrt(Math.random()) * spread;
+        this.nano.push({ sx: from.x, sy: from.y, sz: from.z, ex: t.x + Math.cos(a) * r, ey: t.y + Math.random() * spread * 0.6, ez: t.z + Math.sin(a) * r, born: now - Math.random() * dt });
+      }
     }
-    this.sprayGeo.setDrawRange(0, n * 2);
+    let n = 0;
+    this.nano = this.nano.filter((p) => {
+      const f = (now - p.born) / NANO_FLIGHT_MS;
+      if (f >= 1) return false;
+      // Ease out, so particles shoot from the nozzle and settle onto the work.
+      const e = 1 - (1 - f) * (1 - f);
+      this.sprayPositions.set([p.sx + (p.ex - p.sx) * e, p.sy + (p.ey - p.sy) * e, p.sz + (p.ez - p.sz) * e], n * 3);
+      n++;
+      return true;
+    });
+    this.sprayGeo.setDrawRange(0, n);
     (this.sprayGeo.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
     this.sprays.visible = n > 0;
   }
