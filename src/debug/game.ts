@@ -103,7 +103,24 @@ scene.background = new THREE.Color(0x000000);
 scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
 sun.position.set(-1, 4, 1);
-scene.add(sun);
+scene.add(sun, sun.target);
+// Shadows, as TA draws under every unit: the sun casts them a little down and to the right. The
+// shadow camera follows the view so only what's on screen needs shadow-map space.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0015;
+const SUN_DIR = new THREE.Vector3(-0.6, 1, -0.5).normalize();
+function aimSun(): void {
+  const t = rts.target;
+  const reach = rts.viewHalfHeight() * Math.max(1, rts.aspect) * 1.4;
+  sun.target.position.copy(t);
+  sun.position.copy(t).addScaledVector(SUN_DIR, 3000);
+  const cam = sun.shadow.camera;
+  Object.assign(cam, { left: -reach, right: reach, top: reach, bottom: -reach, near: 10, far: 8000 });
+  cam.updateProjectionMatrix();
+}
 const rts = new RtsCamera(renderer.domElement, { mapWidth: 1, mapHeight: 1 }, { wasd: false, dragButtons: [1], rotate: false });
 
 function resize(): void {
@@ -167,6 +184,7 @@ function frame(t: number): void {
       refreshPanelSoon();
     });
   }
+  aimSun();
   timed('render', () => renderer.render(scene, rts.camera));
   timed('minimap', drawMinimap);
   timed('overlay', drawOverlay);
@@ -255,10 +273,12 @@ async function startGame(s: GameSettings, save?: SavedGame): Promise<void> {
 
   stopGame();
   const group = new THREE.Group();
+  terrain.mesh.receiveShadow = true;
+  featureGroup.traverse((o) => (o.castShadow = o instanceof THREE.Mesh));
   group.add(terrain.mesh, sprites.group, featureGroup, units.group, combat.group);
   scene.add(group);
   game = { map, world, terrain, sprites, featureModels, featureObjects, hiddenFeatures: new Set(), extraFeatures: new Map(), units, combat, fogVersion: -1, group };
-  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt, audio };
+  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt, audio, renderer };
   selected.clear();
   setMode({ kind: 'select' });
   acc = 0;
@@ -645,8 +665,7 @@ function reply(key: UnitSoundKey): void {
 
 /** Where sounds are heard from: the middle of the view, and how wide the view is on the ground. */
 function listener(): { x: number; z: number; halfWidth: number } {
-  const halfHeight = rts.distance * Math.tan(THREE.MathUtils.degToRad(rts.camera.fov / 2));
-  return { x: rts.target.x, z: rts.target.z, halfWidth: halfHeight * rts.camera.aspect };
+  return { x: rts.target.x, z: rts.target.z, halfWidth: rts.viewHalfHeight() * rts.aspect };
 }
 
 // Browsers only allow sound once the player has clicked or pressed a key.

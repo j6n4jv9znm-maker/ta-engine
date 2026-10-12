@@ -18,12 +18,18 @@ import { CELL_SIZE, TILE_SIZE, type TntMap } from '../formats/tnt';
 const ATLAS_TILES_PER_ROW = 64;
 
 const vertexShader = /* glsl */ `
+  #include <common>
+  #include <shadowmap_pars_vertex>
   attribute vec2 artPos;
   varying vec2 vArt;
   varying vec2 vGround;
   void main() {
     vArt = artPos;
     vGround = position.xz;
+    // For units' shadows on the ground (three.js's shadow-map chunks want these names).
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vec3 transformedNormal = normalMatrix * vec3(0.0, 1.0, 0.0);
+    #include <shadowmap_vertex>
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -31,6 +37,11 @@ const vertexShader = /* glsl */ `
 const fragmentShader = /* glsl */ `
   precision highp float;
   precision highp int;
+  #include <common>
+  #include <packing>
+  #include <lights_pars_begin>
+  #include <shadowmap_pars_fragment>
+  #include <shadowmask_pars_fragment>
   uniform sampler2D tileIndex;   // RG8: tile number = r + g*256
   uniform sampler2D atlas;       // R8: palette indices
   uniform sampler2D palette;     // 256x1 RGBA
@@ -53,6 +64,8 @@ const fragmentShader = /* glsl */ `
     float idx = texelFetch(atlas, texel, 0).r * 255.0;
     gl_FragColor = texelFetch(palette, ivec2(int(idx + 0.5), 0), 0);
     if (fogSize.x > 0.0) gl_FragColor.rgb *= texture2D(fog, vGround / fogSize).r;
+    // Units' shadows: the ground's own colours are already lit, so a shadow just darkens them.
+    gl_FragColor.rgb *= mix(0.4, 1.0, getShadowMask());
     #include <colorspace_fragment>
   }
 `;
@@ -127,7 +140,11 @@ export function createTerrain(tnt: TntMap, palette: Palette): Terrain {
   const material = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
+    lights: true,
     uniforms: {
+      ...THREE.UniformsUtils.clone(THREE.UniformsLib.lights),
+      // three.js only sets this for its built-in materials, so the terrain says it itself.
+      receiveShadow: { value: true },
       tileIndex: { value: tileIndex },
       atlas: { value: atlas },
       palette: { value: paletteTex },
