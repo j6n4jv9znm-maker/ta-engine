@@ -16,7 +16,7 @@ import { parsePcx } from '../formats/pcx';
 import { GameAudio, type UnitSoundKey } from '../audio/gameAudio';
 import { SetupScreen, type GameSettings } from '../ui/setupScreen';
 import { TaGui } from '../ui/taGui';
-import { loadCampaigns, loadMission, missionResult, type Mission } from '../map/mission';
+import { loadCampaigns, loadMission, missionResult, type Campaign, type Mission, type MissionProgress } from '../map/mission';
 import { addSave, deleteSave, describeSave, listSaves } from '../ui/saves';
 import { createTerrain, type Terrain } from '../graphics/terrain';
 import { loadTextureLibrary, type TextureLibrary } from '../graphics/textures';
@@ -85,6 +85,10 @@ let settings: GameSettings | undefined;
 let seed = 0;
 let mission: Mission | undefined;
 let missionOutcome: 'won' | 'lost' | undefined;
+let missionProgress: MissionProgress = { seconds: 0, enemyKills: new Map(), startTypes: new Set() };
+let missionEventsTick = -1;
+let missionCheckedTick = -Infinity;
+const nextMissionEl = $<HTMLButtonElement>('nextMission');
 let speed = 1;
 
 /** What a left-click does right now. */
@@ -229,6 +233,7 @@ async function load(open: () => Promise<Vfs | undefined>, none: string): Promise
     aiPlans = await loadAiProfile(v);
     // Campaign mission maps belong on the Campaign tab, not in the skirmish list.
     const campaigns = await loadCampaigns(v);
+    campaignsCache = campaigns;
     const missionMaps = new Set(campaigns.flatMap((c) => c.missions.map((m) => m.map.toLowerCase())));
     const maps = listMaps(v)
       .filter((n) => !/example/i.test(n) && !missionMaps.has(n.toLowerCase()))
@@ -259,7 +264,15 @@ async function startGame(s: GameSettings, save?: SavedGame): Promise<void> {
   const deps = { assets: (n: string) => assets.get(n.toLowerCase()), weapons, featureDefs, menus, aiPlans };
   mission = s.mission ? await loadMission(vfs, s.mission) : undefined;
   missionOutcome = undefined;
+  nextMissionEl.hidden = true;
   const { world, home: mine } = createSkirmish(map, s, seed, deps, mission);
+  missionProgress = {
+    seconds: 0,
+    enemyKills: new Map(),
+    startTypes: new Set([...world.units.values()].filter((u) => u.owner === ME).map((u) => u.def.unitName.toUpperCase())),
+  };
+  missionEventsTick = -1;
+  missionCheckedTick = -Infinity;
   if (save) {
     loadingEl.hidden = false;
     await replayGame(world, save, (f) => (loadingEl.textContent = `Loading saved game… ${Math.round(f * 100)}%`));
@@ -284,7 +297,7 @@ async function startGame(s: GameSettings, save?: SavedGame): Promise<void> {
   group.add(terrain.mesh, sprites.group, featureGroup, units.group, combat.group);
   scene.add(group);
   game = { map, world, terrain, sprites, featureModels, featureObjects, hiddenFeatures: new Set(), extraFeatures: new Map(), units, combat, fogVersion: -1, group };
-  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt, audio, renderer };
+  (window as unknown as { ta: unknown }).ta = { game, selected, scene, rts, frameTimes, frame, mode: () => mode, featureAt, groundAt, audio, renderer, nextMissionAfter, campaigns: () => campaignsCache };
   selected.clear();
   setMode({ kind: 'select' });
   acc = 0;
@@ -426,7 +439,27 @@ function drawOverlay(): void {
     g.fillRect(s.x - bw / 2, s.y, bw * f, 3);
   }
   // Win or lose (a campaign mission by its own goals, checked about once a second).
-  if (mission && !missionOutcome && game.world.tickCount % 30 === 0) missionOutcome = missionResult(mission.goals, game.world.units.values());
+  if (mission && !missionOutcome) {
+    // Count enemy losses by type (for "destroy N of these" goals).
+    for (const e of game.world.events) {
+      if (e.tick <= missionEventsTick || e.kind !== 'death') continue;
+      if (game.world.units.get(e.unitId)?.owner === ME) continue;
+      const name = e.unitName.toUpperCase();
+      missionProgress.enemyKills.set(name, (missionProgress.enemyKills.get(name) ?? 0) + 1);
+    }
+    missionEventsTick = game.world.tickCount;
+    // About once a second of game time (frames don't land on exact ticks, so not "tick % 30").
+    if (game.world.tickCount - missionCheckedTick >= 30) {
+      missionCheckedTick = game.world.tickCount;
+      missionProgress.seconds = game.world.tickCount / 30;
+      missionOutcome = missionResult(mission.goals, game.world.units.values(), missionProgress);
+      if (missionOutcome === 'won' && settings?.mission) {
+        markMissionDone(settings.mission);
+        const next = nextMissionAfter(settings.mission);
+        nextMissionEl.hidden = !next;
+      }
+    }
+  }
   const lost = mission ? missionOutcome === 'lost' : game.world.defeated.has(ME);
   const won = mission ? missionOutcome === 'won' : !lost && game.world.players.every((_, p) => p === ME || game!.world.defeated.has(p)) && game.world.players.length > 1;
   if (lost || won) {
@@ -438,7 +471,7 @@ function drawOverlay(): void {
     g.fillText(mission ? (lost ? 'Mission failed' : 'Mission complete') : lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2);
     g.font = '14px ui-monospace, Menlo, monospace';
     g.fillStyle = '#ddd';
-    g.fillText('Press Restart to play again, or Menu for a new game.', w / 2, h / 2 + 26);
+    g.fillText(mission && won && !nextMissionEl.hidden ? 'Press Next mission to carry on, or Menu.' : 'Press Restart to play again, or Menu for a new game.', w / 2, h / 2 + 26);
   }
 }
 
@@ -1014,6 +1047,39 @@ async function dressSetupScreen(v: Vfs): Promise<void> {
     // keep the plain look
   }
 }
+
+// --- Campaign progress -------------------------------------------------------------------
+let campaignsCache: Campaign[] = [];
+const DONE_KEY = 'ta.missionsDone';
+function missionsDone(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(DONE_KEY) ?? '[]') as string[]);
+  } catch {
+    return new Set();
+  }
+}
+function markMissionDone(map: string): void {
+  const done = missionsDone();
+  done.add(map.toLowerCase());
+  try {
+    localStorage.setItem(DONE_KEY, JSON.stringify([...done]));
+  } catch {
+    // progress just isn't remembered
+  }
+}
+function nextMissionAfter(map: string): string | undefined {
+  for (const c of campaignsCache) {
+    const i = c.missions.findIndex((m) => m.map.toLowerCase() === map.toLowerCase());
+    if (i >= 0) return c.missions[i + 1]?.map;
+  }
+  return undefined;
+}
+nextMissionEl.addEventListener('click', () => {
+  const next = settings?.mission ? nextMissionAfter(settings.mission) : undefined;
+  if (!next || !settings) return;
+  nextMissionEl.hidden = true;
+  void startGame({ ...settings, map: next, mission: next });
+});
 
 /** The saved-games list on the setup screen. */
 function showSaves(): void {

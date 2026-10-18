@@ -33,12 +33,32 @@ export interface MissionUnit {
   health: number;
   /** TA angle units. */
   angle: number;
+  /** Its starting orders ("InitialMission"), run by sim/missionScript.ts. */
+  orders: string;
 }
 
+/**
+ * A mission's goals, read as TA's mission files use them (our reading: the win and lose keys appear
+ * together, e.g. mission 1 "guard the Galactic Gate" wins on MoveUnitToRadius and loses on
+ * AllUnitsKilledOfType=ARMGATE).
+ *   Win:  MoveUnitToRadius, DestroyAllUnits, KillUnitType=TYPE, n, CaptureUnitType (we have no capture,
+ *         so destroying it counts), BuildUnitType, VictoryTimerRunsOut (seconds).
+ *   Lose: AllUnitsKilled (all yours gone), AllUnitsKilledOfType (all of yours of that type gone).
+ */
 export interface MissionGoals {
   moveTo?: { x: number; z: number; radius: number };
-  killAll: boolean;
-  killAllOfType?: string;
+  /** Win by destroying every enemy unit. */
+  destroyAll: boolean;
+  /** Win by destroying this many enemy units of a type. */
+  killType?: { type: string; count: number };
+  /** Win by destroying (in TA: capturing) every enemy unit of this type. */
+  captureType?: string;
+  /** Win by building one of these. */
+  buildType?: string;
+  /** Win by holding out this many seconds. */
+  timer?: number;
+  /** Lose when you have none of this type left (it's something you must protect). */
+  protectType?: string;
 }
 
 export interface Mission {
@@ -82,11 +102,18 @@ export async function loadMission(vfs: Vfs, map: string): Promise<Mission> {
 export async function parseMission(map: string, root: TdfBlock, readBrief: (name: string) => Promise<string>): Promise<Mission> {
   const h = getBlock(root, 'GlobalHeader') ?? {};
   const num = (v: string | undefined) => Number.parseFloat(v ?? '') || 0;
-  const goals: MissionGoals = { killAll: num(getValue(h, 'AllUnitsKilled')) !== 0 };
+  const goals: MissionGoals = { destroyAll: num(getValue(h, 'DestroyAllUnits')) !== 0 };
   const move = getValue(h, 'MoveUnitToRadius')?.split(',').map((s) => s.trim());
   if (move && move.length >= 4) goals.moveTo = { x: num(move[1]), z: num(move[2]), radius: Math.max(32, num(move[3])) };
-  const ofType = getValue(h, 'AllUnitsKilledOfType');
-  if (ofType) goals.killAllOfType = ofType.toUpperCase();
+  const kill = getValue(h, 'KillUnitType')?.split(',').map((s) => s.trim());
+  if (kill?.[0]) goals.killType = { type: kill[0].toUpperCase(), count: Math.max(1, num(kill[1])) };
+  const word = (k: string) => getValue(h, k)?.split(',')[0]?.trim().toUpperCase() || undefined;
+  goals.captureType = word('CaptureUnitType');
+  goals.buildType = word('BuildUnitType');
+  goals.protectType = word('AllUnitsKilledOfType');
+  if (num(getValue(h, 'VictoryTimerRunsOut')) > 0) goals.timer = num(getValue(h, 'VictoryTimerRunsOut'));
+  // A mission with no goal we understand is won by destroying the enemy.
+  if (!goals.moveTo && !goals.killType && !goals.captureType && !goals.buildType && !goals.timer) goals.destroyAll = true;
 
   // Units from the first (easiest) schema.
   const schema = getBlock(h, 'Schema 0') ?? {};
@@ -103,38 +130,54 @@ export async function parseMission(map: string, root: TdfBlock, readBrief: (name
       owner: num(getValue(b, 'Player')) === 1 ? 0 : 1,
       health: num(getValue(b, 'HealthPercentage') ?? '100') || 100,
       angle: num(getValue(b, 'Angle')),
+      orders: getValue(b, 'InitialMission') ?? '',
     });
   }
   const brief = getValue(h, 'brief');
   return { map, name: getValue(h, 'missionname') ?? map, briefing: brief ? (await readBrief(brief)).trim() : '', units, goals };
 }
 
-/** "won", "lost" or undefined (still going), judged from what's left in the game. */
+/** What happened so far that the goals need to know: enemy kills by type, and the game time. */
+export interface MissionProgress {
+  seconds: number;
+  /** Enemy units destroyed, by unit name. */
+  enemyKills: Map<string, number>;
+  /** Unit names the player had at the start (so building one doesn't count as "built"). */
+  startTypes: Set<string>;
+}
+
+/** "won", "lost" or undefined (still going). */
 export function missionResult(
   goals: MissionGoals,
   units: Iterable<{ owner: number; dying: unknown; x: number; z: number; def: { unitName: string; bmCode?: number } }>,
+  progress: MissionProgress = { seconds: 0, enemyKills: new Map(), startTypes: new Set() },
 ): 'won' | 'lost' | undefined {
   let mine = 0;
   let enemies = 0;
-  let enemiesOfType = 0;
+  let protectedLeft = 0;
+  let captureLeft = 0;
+  let built = false;
   let reached = false;
   for (const u of units) {
     if (u.dying) continue;
+    const name = u.def.unitName.toUpperCase();
     if (u.owner === 0) {
       mine++;
+      if (goals.protectType && name === goals.protectType) protectedLeft++;
+      if (goals.buildType && name === goals.buildType && !progress.startTypes.has(name)) built = true;
       // Only a unit that can move counts as reaching the spot (mission 1's gate already stands on it).
       if (goals.moveTo && u.def.bmCode !== 0 && Math.hypot(u.x - goals.moveTo.x, u.z - goals.moveTo.z) <= goals.moveTo.radius) reached = true;
     } else {
       enemies++;
-      if (goals.killAllOfType && u.def.unitName.toUpperCase() === goals.killAllOfType) enemiesOfType++;
+      if (goals.captureType && name === goals.captureType) captureLeft++;
     }
   }
-  // Any one goal met wins. (A "kill all of type" goal only counts when no other goal is set, since
-  // missions also name types that may never appear.)
   if (mine === 0) return 'lost';
-  if (reached) return 'won';
-  if (goals.killAll && enemies === 0) return 'won';
-  if (goals.killAllOfType && !goals.killAll && !goals.moveTo && enemiesOfType === 0) return 'won';
-  if (!goals.killAll && !goals.moveTo && !goals.killAllOfType && enemies === 0) return 'won';
+  if (goals.protectType && protectedLeft === 0 && progress.startTypes.has(goals.protectType)) return 'lost';
+  if (reached || built) return 'won';
+  if (goals.destroyAll && enemies === 0) return 'won';
+  if (goals.killType && (progress.enemyKills.get(goals.killType.type) ?? 0) >= goals.killType.count) return 'won';
+  if (goals.captureType && captureLeft === 0 && (progress.enemyKills.get(goals.captureType) ?? 0) > 0) return 'won';
+  if (goals.timer && progress.seconds >= goals.timer) return 'won';
   return undefined;
 }

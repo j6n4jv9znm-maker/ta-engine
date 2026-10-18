@@ -88,6 +88,7 @@ function startMission(world: World, map: GameMap, s: SkirmishSettings, deps: Ski
     if (!a) continue;
     const u = world.spawn(a, m.owner, m.x, m.z, Math.round(m.angle) & 0xffff);
     if (u && m.health < 100) u.hp = Math.max(1, (u.def.maxDamage * m.health) / 100);
+    if (u && m.orders.trim()) world.missionScripts.add(u.id, m.orders);
   }
   if (s.opponent !== 'none') world.ais.push(new SkirmishAi(1, s.opponent, deps.menus, deps.aiPlans.get(s.opponent), 977));
   const mine = mission.units.filter((u) => u.owner === HUMAN);

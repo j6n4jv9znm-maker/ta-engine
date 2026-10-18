@@ -1,3 +1,4 @@
+import { MissionScripts } from './missionScript';
 import type { ModelPiece } from '../formats/3do';
 import type { CobScript } from '../formats/cob';
 import { CELL_SIZE } from '../formats/tnt';
@@ -230,6 +231,8 @@ export class World {
   windSpeed = 0;
   /** Cheats switched on, per player (codes without the "+", lower case). */
   readonly cheats = new Map<number, Set<string>>();
+  /** A campaign mission's scripted unit orders (empty in skirmish). */
+  readonly missionScripts = new MissionScripts();
   windDirection = 0;
   private nextProjectileId = 1;
   /** Re-plans allowed this tick; units over budget keep their old path a little longer. */
@@ -463,6 +466,7 @@ export class World {
     this.queue = [];
     for (const c of cmds) this.apply(c);
     for (const ai of this.ais) ai.update(this);
+    this.missionScripts.update(this);
     this.replanBudget = REPLANS_PER_TICK;
     this.planBudget = PLANS_PER_TICK;
 
