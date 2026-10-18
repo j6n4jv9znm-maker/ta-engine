@@ -25,6 +25,8 @@ import { limitOf, profileKeys, weightOf, type AiPlan, type Difficulty } from './
  * profile plan it follows.
  */
 
+type WavePlan = 'direct' | 'flank' | 'pincer' | 'raid' | 'raid+direct';
+
 interface Tuning {
   thinkSeconds: number;
   firstWave: number;
@@ -57,6 +59,8 @@ export class SkirmishAi {
   /** Building jobs handed out but not yet started, so two builders don't pick the same spot. */
   private claimed = new Map<number, { x: number; z: number; tick: number }>();
   private hasWater: boolean | undefined;
+  private harassed = false;
+  private nextWaveSize: number | undefined;
   private patches: { x: number; z: number }[] | undefined;
 
   /** The map's metal patches (they never move), looked up once rather than for every candidate site. */
@@ -297,20 +301,79 @@ export class SkirmishAi {
         if (target) this.issue(world, { kind: 'attack', unitIds: [u.id], targetId: target.id });
         else {
           const next = this.attackTarget(world, u);
-          if (next) this.issue(world, { kind: 'move', unitIds: [u.id], x: next.x, z: next.z });
+          if (next) this.issue(world, { kind: 'move', unitIds: [u.id], x: next.x, z: next.z, fight: true });
         }
       }
     }
-    // Launch the next wave once enough fighters are waiting at home; they join any attack in progress.
     const idle = army.filter((u) => u.tasks.length === 0 && !this.attack?.ids.has(u.id));
-    const size = Math.min(this.tuning.maxWave, this.tuning.firstWave + this.wave * this.tuning.waveGrowth);
-    if (idle.length < size) return;
-    const target = this.attackTarget(world, idle[0]!);
-    if (!target) return;
+    // Early harassment: a couple of fast units go for the enemy's economy before the first real wave.
+    if (this.wave === 0 && !this.harassed && world.tickCount > 4 * 60 * TICKS_PER_SECOND) {
+      const fast = idle.filter((u) => u.def.maxVelocity >= 2.2).slice(0, 3);
+      if (fast.length >= 2) {
+        this.harassed = true;
+        this.launch(world, fast, 'raid');
+        return;
+      }
+    }
+    // Launch the next wave once enough fighters are waiting at home; they join any attack in progress.
+    // The size varies a little from wave to wave, so the timing isn't always the same.
+    if (this.nextWaveSize === undefined) {
+      const base = Math.min(this.tuning.maxWave, this.tuning.firstWave + this.wave * this.tuning.waveGrowth);
+      this.nextWaveSize = Math.max(3, Math.round(base * (0.75 + this.rng.int(0, 50) / 100)));
+    }
+    if (idle.length < this.nextWaveSize) return;
+    this.nextWaveSize = undefined;
     this.wave++;
+    // A different plan each time: straight at them, round a side, a pincer from both sides, or a fast
+    // group raiding the economy while the rest goes straight in.
+    const plans: WavePlan[] = ['direct', 'flank', 'pincer', 'raid+direct'];
+    this.launch(world, idle, plans[this.rng.int(0, plans.length - 1)]!);
+  }
+
+  /** Sends `units` to attack using `plan`. Every move is an attack-move, so they fight what they meet. */
+  private launch(world: World, units: SimUnit[], plan: WavePlan): void {
+    const target = this.attackTarget(world, units[0]!);
+    if (!target) return;
     if (!this.attack) this.attack = { ...target, ids: new Set() };
-    for (const u of idle) this.attack.ids.add(u.id);
-    this.issue(world, { kind: 'move', unitIds: idle.map((u) => u.id), x: target.x, z: target.z });
+    for (const u of units) this.attack.ids.add(u.id);
+    const go = (group: SimUnit[], side: number) => {
+      if (!group.length) return;
+      const ids = group.map((u) => u.id);
+      if (side !== 0) {
+        // Swing out to one side of the straight line, then turn in on the target.
+        const sx = group.reduce((a, u) => a + u.x, 0) / group.length;
+        const sz = group.reduce((a, u) => a + u.z, 0) / group.length;
+        const dx = target.x - sx;
+        const dz = target.z - sz;
+        const len = Math.hypot(dx, dz) || 1;
+        const off = Math.min(900, len * 0.45) * side;
+        const wx = Math.max(64, Math.min(world.map.widthUnits - 64, sx + dx * 0.55 - (dz / len) * off));
+        const wz = Math.max(64, Math.min(world.map.heightUnits - 64, sz + dz * 0.55 + (dx / len) * off));
+        this.issue(world, { kind: 'move', unitIds: ids, x: wx, z: wz, fight: true });
+        this.issue(world, { kind: 'move', unitIds: ids, x: target.x, z: target.z, fight: true, queue: true });
+      } else {
+        this.issue(world, { kind: 'move', unitIds: ids, x: target.x, z: target.z, fight: true });
+      }
+    };
+    const side = this.rng.int(0, 1) ? 1 : -1;
+    if (plan === 'direct') go(units, 0);
+    else if (plan === 'flank') go(units, side);
+    else if (plan === 'pincer') {
+      const half = Math.ceil(units.length / 2);
+      go(units.slice(0, half), 1);
+      go(units.slice(half), -1);
+    } else {
+      // Raids: the fastest few go for metal extractors and power plants it has seen; the rest (if any) go straight in.
+      const byPace = [...units].sort((a, b) => b.def.maxVelocity - a.def.maxVelocity || a.id - b.id);
+      const raiders = plan === 'raid' ? byPace : byPace.slice(0, Math.max(2, Math.floor(units.length / 3)));
+      const econ = world
+        .unitsInOrder()
+        .filter((e) => e.owner !== this.player && !e.dying && world.canSee(this.player, e) && e.def.bmCode === 0 && (e.def.extractsMetal > 0 || e.def.energyMake > 0 || e.def.windGenerator > 0 || e.def.energyUse < 0));
+      const prey = nearest(econ, raiders[0]!);
+      if (prey) this.issue(world, { kind: 'attack', unitIds: raiders.map((u) => u.id), targetId: prey.id });
+      else go(raiders, side);
+      go(units.filter((u) => !raiders.includes(u)), 0);
+    }
   }
 
   /**

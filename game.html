@@ -25,6 +25,7 @@
       #sysmenu details { font-size: 11px; line-height: 1.35; }
       #sysmenu .links a { color: var(--dim); font-size: 11px; }
       #chat { position: absolute; left: 14px; bottom: 50px; width: min(420px, 70%); padding: 6px 8px; font: 13px ui-monospace, Menlo, monospace; background: rgba(0, 0, 0, 0.8); color: #e8e8c8; border: 1px solid #556; }
+      #nextMission { position: absolute; left: 50%; top: calc(50% + 50px); transform: translateX(-50%); z-index: 5; }
       #note { position: absolute; left: 14px; bottom: 86px; padding: 4px 8px; background: rgba(0, 0, 0, 0.7); color: #9f9; font-size: 13px; pointer-events: none; }
       #bottombar { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; display: flex; justify-content: space-between; align-items: center; padding: 0 14px; background: #111 var(--bot-art, none) left / 100% 100% no-repeat; image-rendering: pixelated; color: #e8e8c8; font-size: 12px; text-shadow: 0 1px 0 #000; pointer-events: none; white-space: nowrap; overflow: hidden; }
       h1 { font-size: 14px; margin: 0; color: var(--accent); }
@@ -112,7 +113,9 @@
           Builders: pick something to build, then left-click the ground (shift to queue more). Right-click or Esc cancels.<br />
           Factories: click a unit to queue it (shift: 5), right-click to remove. Right-click the ground sets the rally point.<br />
           Enter opens the chat line for cheats: +atm, +nocost, +nowisee, +doubleshot, +halfshot.<br />
-          S stops. Ctrl+D self-destructs what's selected after 5 seconds (press again to cancel). Swipe with two fingers (or arrow keys) to move the view; pinch or + / − to zoom. Space jumps to your selected units, or to your Commander.
+          Groups: Ctrl+1–9 makes the selection a group, 1–9 selects it (twice quickly to jump to it). Groups move at their slowest unit's pace so they arrive together. Shift+right-click queues waypoints.<br />
+          A then click: attack-move, fighting anything met on the way.<br />
+          S stops. Ctrl+D self-destructs what's selected after 5 seconds (press again to cancel). Swipe with two fingers (or arrow keys) to move the view; pinch or + / − to zoom. Space jumps to your selected units, or to your Commander; Ctrl+C selects your Commander and jumps to it.
           <label class="row">Open your TA folder: <input id="picker" type="file" webkitdirectory multiple style="width: 100%" /></label>
         </details>
         <div class="dim links"><a href="/maps.html">maps</a> <a href="/models.html">models</a></div>
@@ -126,6 +129,7 @@
       <div id="box"></div>
       <input id="chat" hidden autocomplete="off" spellcheck="false" placeholder="Type a cheat, e.g. +atm, then Enter (Esc to close)" />
       <div id="note" hidden></div>
+      <button id="nextMission" class="big start" hidden>Next mission ›</button>
       <div id="bottombar"><span id="selInfo">Nothing selected.</span><span id="clock"></span></div>
       <div id="loading" hidden>Loading saved game…</div>
       <div id="welcome" hidden>

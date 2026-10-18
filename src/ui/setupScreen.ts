@@ -130,9 +130,15 @@ export class SetupScreen {
       const h = document.createElement('h2');
       h.textContent = c.name;
       this.list.append(h);
+      let done = new Set<string>();
+      try {
+        done = new Set(JSON.parse(localStorage.getItem('ta.missionsDone') ?? '[]') as string[]);
+      } catch {
+        // no progress remembered
+      }
       for (const m of c.missions) {
         const b = document.createElement('button');
-        b.textContent = m.name;
+        b.textContent = (done.has(m.map.toLowerCase()) ? '✓ ' : '') + m.name;
         b.dataset.map = m.map;
         b.addEventListener('click', () => this.pickMission(m.map));
         this.list.append(b);

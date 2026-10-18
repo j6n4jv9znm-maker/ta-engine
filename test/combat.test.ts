@@ -169,6 +169,26 @@ describe('combat', () => {
     expect(testWeapon('PLAIN', 'range=100;').tolerance).toBe(256);
   });
 
+  it('attack-move: a unit stops to fight what it meets, then carries on to the spot', () => {
+    const w = newWorld();
+    const tank = w.spawn(TANK, 0, 100, 300)!;
+    const enemy = w.spawn(DUMMY, 1, 400, 330)!;
+    w.issue({ kind: 'move', unitIds: [tank.id], x: 800, z: 300, fight: true });
+    run(w, 30 * 40);
+    expect(alive(w, enemy)).toBe(false);
+    expect(Math.hypot(tank.x - 800, tank.z - 300)).toBeLessThan(40);
+  });
+
+  it("a group moves at its slowest member's pace", () => {
+    const w = newWorld();
+    const fast = w.spawn(testUnit({ unitName: 'FAST', maxVelocity: 4 }), 0, 100, 300)!;
+    const slow = w.spawn(testUnit({ unitName: 'SLOW', maxVelocity: 1 }), 0, 100, 360)!;
+    w.issue({ kind: 'move', unitIds: [fast.id, slow.id], x: 700, z: 330 });
+    run(w, 30 * 5);
+    expect(fast.speed).toBeLessThanOrEqual(1.0001);
+    expect(Math.abs(fast.x - slow.x)).toBeLessThan(30);
+  });
+
   it('is deterministic', () => {
     const play = () => {
       const w = newWorld();
