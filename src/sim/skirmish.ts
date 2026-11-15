@@ -3,6 +3,7 @@ import type { Mission } from '../map/mission';
 import type { FeatureDef } from '../map/features';
 import type { AiPlan, Difficulty } from './ai/aiProfile';
 import { SkirmishAi } from './ai/skirmishAi';
+import { boardsTransport, dropsPassengers } from './missionScript';
 import type { BuildMenus } from './buildMenus';
 import type { WeaponDef } from './weaponDef';
 import { World, type Command, type UnitAssets } from './world';
@@ -83,12 +84,19 @@ export function createSkirmish(map: GameMap, s: SkirmishSettings, seed: number, 
 
 /** A campaign mission: the units the mission places, and the computer playing the other side. */
 function startMission(world: World, map: GameMap, s: SkirmishSettings, deps: SkirmishDeps, mission: Mission): Skirmish {
+  // Units riding in a transport that drops them off later arrive as reinforcements, not at the start.
+  const droppers = new Set(mission.units.filter((m) => m.ident && dropsPassengers(m.orders)).map((m) => m.ident.toLowerCase()));
   for (const m of mission.units) {
     const a = deps.assets(m.unitName.toLowerCase());
     if (!a) continue;
+    const ride = boardsTransport(m.orders);
+    if (ride && droppers.has(ride)) {
+      world.missionScripts.addPassenger(ride, m);
+      continue;
+    }
     const u = world.spawn(a, m.owner, m.x, m.z, Math.round(m.angle) & 0xffff);
     if (u && m.health < 100) u.hp = Math.max(1, (u.def.maxDamage * m.health) / 100);
-    if (u && m.orders.trim()) world.missionScripts.add(u.id, m.orders);
+    if (u && (m.orders.trim() || m.ident)) world.missionScripts.add(u.id, m.orders, m.ident, u.hp);
   }
   if (s.opponent !== 'none') world.ais.push(new SkirmishAi(1, s.opponent, deps.menus, deps.aiPlans.get(s.opponent), 977));
   const mine = mission.units.filter((u) => u.owner === HUMAN);

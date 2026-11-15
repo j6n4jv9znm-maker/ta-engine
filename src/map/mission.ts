@@ -35,6 +35,8 @@ export interface MissionUnit {
   angle: number;
   /** Its starting orders ("InitialMission"), run by sim/missionScript.ts. */
   orders: string;
+  /** Its name ("Ident"), which other units' orders refer to; often empty. */
+  ident: string;
 }
 
 /**
@@ -131,6 +133,7 @@ export async function parseMission(map: string, root: TdfBlock, readBrief: (name
       health: num(getValue(b, 'HealthPercentage') ?? '100') || 100,
       angle: num(getValue(b, 'Angle')),
       orders: getValue(b, 'InitialMission') ?? '',
+      ident: (getValue(b, 'Ident') ?? '').trim(),
     });
   }
   const brief = getValue(h, 'brief');
