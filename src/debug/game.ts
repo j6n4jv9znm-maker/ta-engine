@@ -89,6 +89,12 @@ let missionProgress: MissionProgress = { seconds: 0, enemyKills: new Map(), star
 let missionEventsTick = -1;
 let missionCheckedTick = -Infinity;
 const nextMissionEl = $<HTMLButtonElement>('nextMission');
+const briefingEl = $('briefing');
+/** After a win, when (page time) the next mission starts by itself; undefined when it won't. */
+let autoAdvanceAt: number | undefined;
+const AUTO_ADVANCE_MS = 8000;
+/** Mission messages already shown ("Reinforcements have arrived"). */
+let missionMessagesShown = 0;
 let speed = 1;
 
 /** What a left-click does right now. */
@@ -265,6 +271,9 @@ async function startGame(s: GameSettings, save?: SavedGame): Promise<void> {
   mission = s.mission ? await loadMission(vfs, s.mission) : undefined;
   missionOutcome = undefined;
   nextMissionEl.hidden = true;
+  autoAdvanceAt = undefined;
+  missionMessagesShown = 0;
+  briefingEl.hidden = true;
   const { world, home: mine } = createSkirmish(map, s, seed, deps, mission);
   missionProgress = {
     seconds: 0,
@@ -457,8 +466,22 @@ function drawOverlay(): void {
         markMissionDone(settings.mission);
         const next = nextMissionAfter(settings.mission);
         nextMissionEl.hidden = !next;
+        if (next) autoAdvanceAt = performance.now() + AUTO_ADVANCE_MS;
       }
     }
+  }
+  // Mission news, such as reinforcements dropping in.
+  const news = game.world.missionScripts.messages;
+  for (; missionMessagesShown < news.length; missionMessagesShown++) {
+    const m = news[missionMessagesShown]!;
+    if (m.owner === ME) note(m.text);
+  }
+  // A won mission moves on to the next one by itself after a few seconds (Next mission skips the wait).
+  if (autoAdvanceAt !== undefined && (setup?.visible || nextMissionEl.hidden)) autoAdvanceAt = undefined;
+  if (autoAdvanceAt !== undefined && performance.now() >= autoAdvanceAt) {
+    autoAdvanceAt = undefined;
+    goToNextMission();
+    return;
   }
   const lost = mission ? missionOutcome === 'lost' : game.world.defeated.has(ME);
   const won = mission ? missionOutcome === 'won' : !lost && game.world.players.every((_, p) => p === ME || game!.world.defeated.has(p)) && game.world.players.length > 1;
@@ -471,7 +494,17 @@ function drawOverlay(): void {
     g.fillText(mission ? (lost ? 'Mission failed' : 'Mission complete') : lost ? 'Your Commander was destroyed' : 'Victory: the enemy Commander is destroyed', w / 2, h / 2);
     g.font = '14px ui-monospace, Menlo, monospace';
     g.fillStyle = '#ddd';
-    g.fillText(mission && won && !nextMissionEl.hidden ? 'Press Next mission to carry on, or Menu.' : 'Press Restart to play again, or Menu for a new game.', w / 2, h / 2 + 26);
+    const lastOfCampaign = mission && won && settings?.mission && !nextMissionAfter(settings.mission);
+    const wait = autoAdvanceAt !== undefined ? Math.max(1, Math.ceil((autoAdvanceAt - performance.now()) / 1000)) : 0;
+    g.fillText(
+      mission && won && !nextMissionEl.hidden
+        ? `The next mission starts in ${wait}… (press Next mission to go now)`
+        : lastOfCampaign
+          ? 'Campaign complete! Well done, Commander. Press Menu to play again.'
+          : 'Press Restart to play again, or Menu for a new game.',
+      w / 2,
+      h / 2 + 26,
+    );
   }
 }
 
@@ -1074,11 +1107,27 @@ function nextMissionAfter(map: string): string | undefined {
   }
   return undefined;
 }
-nextMissionEl.addEventListener('click', () => {
+/** Starts the campaign's next mission, paused behind its briefing until you're ready. */
+function goToNextMission(): void {
   const next = settings?.mission ? nextMissionAfter(settings.mission) : undefined;
   if (!next || !settings) return;
   nextMissionEl.hidden = true;
-  void startGame({ ...settings, map: next, mission: next });
+  autoAdvanceAt = undefined;
+  void startGame({ ...settings, map: next, mission: next }).then(() => {
+    if (!mission || settings?.mission !== next) return;
+    const listed = campaignsCache.flatMap((c) => c.missions).find((m) => m.map.toLowerCase() === next.toLowerCase());
+    $('briefingTitle').textContent = listed?.name ?? mission.name;
+    $('briefingText').textContent = mission.briefing.replace(/&[A-Za-z]?/g, '') || 'No briefing for this mission.';
+    briefingEl.hidden = false;
+    paused = true;
+    $('pause').textContent = 'Resume';
+  });
+}
+nextMissionEl.addEventListener('click', goToNextMission);
+$('briefingGo').addEventListener('click', () => {
+  briefingEl.hidden = true;
+  paused = false;
+  $('pause').textContent = 'Pause';
 });
 
 /** The saved-games list on the setup screen. */
